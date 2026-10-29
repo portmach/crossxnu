@@ -49,10 +49,127 @@ index c1c3929..f17c18a 100644
  	return amfi->OSEntitlements_asdict(csblob->csb_entitlements);
  }
 diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
-index 4b1e8a9..095f009 100644
+index 4b1e8a9..2886cdc 100644
 --- a/bsd/kern/kern_trustcache.c
 +++ b/bsd/kern/kern_trustcache.c
-@@ -124,6 +124,10 @@ get_trust_cache_info(void)
+@@ -20,6 +20,116 @@
+  * @APPLE_LICENSE_HEADER_END@
+  */
+ 
++#if CROSSXNU_SECURITY_PERMISSIVE
++
++/*
++ * crossxnu permissive TrustCache implementation.
++ *
++ * The real file below talks to AMFI and interprets libTrustCache objects.
++ * In permissive mode we deliberately do neither: every public entry point
++ * answers "success" without touching AMFI.  This keeps the kernel ABI and
++ * the trust-cache KPI, while making trust a no-op.
++ */
++
++#include <sys/cdefs.h>
++#include <sys/types.h>
++#include <sys/_types/_uuid_t.h>
++#include <mach/vm_types.h>
++#include <sys/trust_caches.h>
++#include <sys/code_signing.h>
++
++uint32_t num_static_trust_caches = 0;
++uint32_t num_engineering_trust_caches = 0;
++uint32_t num_loadable_trust_caches = 0;
++
++void
++trust_cache_runtime_init(void)
++{
++}
++
++void
++load_static_trust_cache(void)
++{
++}
++
++kern_return_t
++static_trust_cache_capabilities(
++	uint32_t *num_static_trust_caches_ret,
++	TCCapabilities_t *capabilities0_ret,
++	TCCapabilities_t *capabilities1_ret)
++{
++	if (num_static_trust_caches_ret != NULL) {
++		*num_static_trust_caches_ret = 0;
++	}
++	if (capabilities0_ret != NULL) {
++		*capabilities0_ret = 0;
++	}
++	if (capabilities1_ret != NULL) {
++		*capabilities1_ret = 0;
++	}
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++check_trust_cache_runtime_for_uuid(
++	__unused const uint8_t check_uuid[kUUIDSize])
++{
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++unload_trust_cache(__unused uuid_t uuid)
++{
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++load_trust_cache(
++	__unused const uint8_t *img4_object, __unused const size_t img4_object_len,
++	__unused const uint8_t *img4_ext_manifest, __unused const size_t img4_ext_manifest_len)
++{
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++load_trust_cache_with_type(
++	__unused TCType_t type,
++	__unused const uint8_t *img4_object, __unused const size_t img4_object_len,
++	__unused const uint8_t *img4_ext_manifest, __unused const size_t img4_ext_manifest_len,
++	__unused const uint8_t *img4_aux_manifest, __unused const size_t img4_aux_manifest_len)
++{
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++load_legacy_trust_cache(
++	__unused const uint8_t *module_data, __unused const size_t module_size)
++{
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++query_trust_cache(
++	__unused TCQueryType_t query_type,
++	__unused const uint8_t cdhash[kTCEntryHashSize],
++	TrustCacheQueryToken_t *query_token)
++{
++	if (query_token != NULL) {
++		*query_token = (TrustCacheQueryToken_t){ 0 };
++	}
++	return KERN_SUCCESS;
++}
++
++kern_return_t
++query_trust_cache_for_rem(
++	__unused const uint8_t cdhash[kTCEntryHashSize],
++	__unused uint8_t *rem_perms)
++{
++	return KERN_NOT_SUPPORTED;
++}
++
++#else /* !CROSSXNU_SECURITY_PERMISSIVE */
++
+ #include <os/atomic_private.h>
+ #include <os/overflow.h>
+ #include <pexpert/pexpert.h>
+@@ -124,6 +234,10 @@ get_trust_cache_info(void)
  void
  trust_cache_runtime_init(void)
  {
@@ -63,7 +180,7 @@ index 4b1e8a9..095f009 100644
  	/* Image4 interface needs to be available */
  	if (img4if == NULL) {
  		panic("image4 interface not available");
-@@ -383,6 +387,10 @@ is_internal_iBoot(void)
+@@ -383,6 +497,10 @@ is_internal_iBoot(void)
  void
  trust_cache_runtime_init(void)
  {
@@ -74,7 +191,7 @@ index 4b1e8a9..095f009 100644
  	bool allow_second_static_cache = false;
  	bool allow_engineering_caches = false;
  
-@@ -563,6 +571,10 @@ SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust
+@@ -563,6 +681,10 @@ SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust
  void
  trust_cache_runtime_init(void)
  {
@@ -85,7 +202,7 @@ index 4b1e8a9..095f009 100644
  	bool allow_second_static_cache = false;
  	bool allow_engineering_caches = false;
  	bool allow_legacy_caches = false;
-@@ -808,6 +820,10 @@ check_trust_cache_runtime_for_uuid(
+@@ -808,6 +930,10 @@ check_trust_cache_runtime_for_uuid(
  	if (check_uuid == NULL) {
  		return KERN_INVALID_ARGUMENT;
  	}
@@ -96,7 +213,7 @@ index 4b1e8a9..095f009 100644
  
  #if CONFIG_SPTM
  	ret = txm_check_trust_cache_runtime_for_uuid(check_uuid);
-@@ -823,6 +839,10 @@ check_trust_cache_runtime_for_uuid(
+@@ -823,6 +949,10 @@ check_trust_cache_runtime_for_uuid(
  kern_return_t
  unload_trust_cache(uuid_t uuid)
  {
@@ -107,7 +224,7 @@ index 4b1e8a9..095f009 100644
  	kern_return_t ret = KERN_DENIED;
  	uuid_string_t uuid_string = {0};
  
-@@ -863,6 +883,11 @@ load_trust_cache(
+@@ -863,6 +993,11 @@ load_trust_cache(
  {
  	TCType_t type = kTCTypeInvalid;
  	kern_return_t ret = KERN_DENIED;
@@ -119,7 +236,7 @@ index 4b1e8a9..095f009 100644
  
  	/* Start from the first valid type and attempt to validate through each */
  	for (type = kTCTypeLTRS; type < kTCTypeTotal; type += 1) {
-@@ -902,6 +927,16 @@ load_trust_cache_with_type(
+@@ -902,6 +1037,16 @@ load_trust_cache_with_type(
  	size_t img4_payload_len = 0;
  	const uint8_t *img4_manifest = NULL;
  	size_t img4_manifest_len = 0;
@@ -136,7 +253,7 @@ index 4b1e8a9..095f009 100644
  
  	/* img4_object is required */
  	if (!img4_object || (img4_object_len == 0)) {
-@@ -1040,6 +1075,13 @@ load_legacy_trust_cache(
+@@ -1040,6 +1185,13 @@ load_legacy_trust_cache(
  {
  	kern_return_t ret = KERN_DENIED;
  	uintptr_t length_check = 0;
@@ -150,7 +267,7 @@ index 4b1e8a9..095f009 100644
  
  	/* Module is required */
  	if (!module_data || (module_size == 0)) {
-@@ -1078,6 +1120,13 @@ query_trust_cache(
+@@ -1078,6 +1230,13 @@ query_trust_cache(
  		printf("unable to query trust caches: no cdhash provided\n");
  		return KERN_INVALID_ARGUMENT;
  	}
@@ -164,7 +281,7 @@ index 4b1e8a9..095f009 100644
  
  #if CONFIG_SPTM
  	ret = txm_query_trust_cache(query_type, cdhash, query_token);
-@@ -1166,6 +1215,10 @@ PHYSMAP_PTOV_check(void *paddr)
+@@ -1166,6 +1325,10 @@ PHYSMAP_PTOV_check(void *paddr)
  void
  load_static_trust_cache(void)
  {
@@ -175,7 +292,7 @@ index 4b1e8a9..095f009 100644
  	DTEntry memory_map = {0};
  	const DTTrustCacheRange *tc_range = NULL;
  	trust_cache_offsets_t *tc_offsets = NULL;
-@@ -1313,6 +1366,9 @@ static_trust_cache_capabilities(
+@@ -1313,6 +1476,9 @@ static_trust_cache_capabilities(
  	*num_static_trust_caches_ret = 0;
  	*capabilities0_ret = kTCCapabilityNone;
  	*capabilities1_ret = kTCCapabilityNone;
@@ -185,6 +302,12 @@ index 4b1e8a9..095f009 100644
  
  	/* Ensure static trust caches have been initialized */
  	if (trust_cache_static_init == false) {
+@@ -1348,3 +1514,5 @@ static_trust_cache_capabilities(
+ 
+ 	return KERN_SUCCESS;
+ }
++
++#endif /* !CROSSXNU_SECURITY_PERMISSIVE */
 diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
 index 79bf0cb..ec2eb90 100644
 --- a/bsd/kern/ubc_subr.c
@@ -231,17 +354,3 @@ index 80740d9..97cf035 100644
  /* Config - Features */
  #define CS_CONFIG_REM_SUPPORTED            (1 << 25)
  #define CS_CONFIG_MAP_JIT                  (1 << 26)
-diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
-index c977c98..56db0e1 100644
---- a/osfmk/kern/startup.c
-+++ b/osfmk/kern/startup.c
-@@ -626,6 +626,9 @@ kernel_bootstrap(void)
- 	kernel_bootstrap_log("code_signing_init");
- 	code_signing_init();
- 	code_signing_configuration(NULL, &cs_config);
-+#if CROSSXNU_SECURITY_PERMISSIVE
-+	AMFI_bootarg_disable_mach_hardening = true;
-+#endif
- #if XNU_TARGET_OS_OSX && (DEVELOPMENT || DEBUG)
- 	if (cs_config & CS_CONFIG_GET_OUT_OF_MY_WAY) {
- 		AMFI_bootarg_disable_mach_hardening = true;

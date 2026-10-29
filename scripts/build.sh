@@ -131,6 +131,7 @@ make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     LIPO="${CROSSXNU_TOOLCHAIN}/bin/lipo" \
     UNIFDEF="${CROSSXNU_TOOLCHAIN}/bin/unifdef" \
     DSYMUTIL="${CROSSXNU_TOOLCHAIN}/bin/dsymutil" \
+    PLUTIL="${CROSSXNU_TOOLCHAIN}/bin/plutil" \
     CTFCONVERT="${CROSSXNU_TOOLCHAIN}/bin/ctf-noop" \
     CTFMERGE="${CROSSXNU_TOOLCHAIN}/bin/ctf-noop" \
     CTFINSERT="${CROSSXNU_TOOLCHAIN}/bin/ctf-noop" \
