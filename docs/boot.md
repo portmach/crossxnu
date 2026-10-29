@@ -73,7 +73,9 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
     (для bare `MH_EXECUTE` считаем `KCFormatStatic`).
 - После этого ядро доходит до `kalloc_type_distribute_budget()` и делит
   на ноль: статический разбор `__kalloc_type` не даёт ни одного view
-  (`total_sig == 0`).
+  (`total_sig == 0`). Патч 0014 берёт границы секции из Mach-O header
+  (`_mh_execute_header` для bare kernel), но деление всё ещё
+  воспроизводится — значит, проблема не только в boundary symbols.
 
 ## Следующий шаг
 
