@@ -83,6 +83,7 @@ if [[ -z "${LOG}" ]]; then
 fi
 
 echo "building XNU ${CROSSXNU_XNU_TAG} (${CONFIG_UC}, ${ARCH_UC})"
+echo "  SECURITY: permissive mode — TrustCache/CodeSignature are NOT enforced"
 echo "  source: ${CROSSXNU_XNU}"
 echo "  SDK:    ${CROSSXNU_SDK}"
 echo "  log:    ${LOG}"

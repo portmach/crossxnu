@@ -12,6 +12,16 @@
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
 
+## 1.1. Security status
+
+**Phase 1 — permissive.** TrustCache и CodeSignature не обеспечивают
+security-модель macOS: подпись/доверие/entitlements не enforced. Это
+осознанное решение, а не «пока не заметили». См. [`../SECURITY.md`](../SECURITY.md)
+и [`security-policy.md`](security-policy.md).
+
+Пока ядро не линкуется и не грузится, permissive-режим — **заявленный
+профиль**, а не проверенная runtime-функция.
+
 ## 2. Что уже проверено
 
 ### 2.1. Host-инструменты

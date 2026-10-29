@@ -7,6 +7,18 @@
 Это часть проекта [PortMach](https://github.com/portmach): «собирается где
 угодно, загружается где угодно, остаётся совместимым с macOS».
 
+> ## ⚠️ Security status: permissive
+>
+> **crossxnu пока не реализует security-модель macOS.**
+> TrustCache и CodeSignature находятся в **permissive-режиме**: ядро не
+> проверяет доверие к CDHash, не требует подписи и не обеспечивает
+> enforcement entitlements. Любой код, который загрузится, считается
+> доверенным; это **небезопасно** и **не предназначено для production**.
+>
+> Это осознанное решение phase 1, а не баг сборки. Подробности, границы
+> режима и план перехода к strict — в [`SECURITY.md`](SECURITY.md) и
+> [`docs/security-policy.md`](docs/security-policy.md).
+
 ## Базовая версия
 
 | Параметр | Значение |
@@ -100,6 +112,9 @@ upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel
 
 ## Документация
 
+- [Security policy / политика безопасности](SECURITY.md)
+- [Security policy: подробно](docs/security-policy.md)
+- [Release notes и обязательные предупреждения](docs/releases.md)
 - [Сборка на Arch Linux / WSL2](docs/build-arch.md)
 - [Архитектура сборки и замены инструментов](docs/architecture.md)
 - [Бинарная совместимость: что сохраняем и что пока нет](docs/compatibility.md)

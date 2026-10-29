@@ -1,5 +1,8 @@
 # Сборка crossxnu на Arch Linux
 
+> **Security:** phase 1 работает в permissive-режиме. TrustCache и
+> CodeSignature не обеспечивают защиту macOS; см. [`../SECURITY.md`](../SECURITY.md).
+
 Документ описывает **проверенный** путь: Arch Linux x86_64 в WSL2, без
 macOS, без Xcode, без Apple SDK. Все команды выполняются внутри WSL.
 

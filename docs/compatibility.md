@@ -154,6 +154,20 @@ DriverKit-dispatch методы (`SetDispatchQueue`, `CopyDispatchQueue`,
 влияет на **экспортируемые заголовки**, не на код ядра. Нужен
 обновлённый `availability.dsl` под 26.5.
 
+## 4.9. Security: permissive TrustCache/CodeSignature
+
+Phase 1 работает в **permissive security mode**: TrustCache не
+проверяется, CodeSignature не enforced. Это меняет **поведение**
+security-подсистем, но не layout структур и не набор syscall'ов:
+
+- `cs_*` syscalls остаются в ABI;
+- `cs_blob`/entitlements разбираются, но не ограничивают;
+- `CS_CONFIG_ALLOW_ANY_SIGNATURE`/`GET_OUT_OF_MY_WAY` включаются явно;
+- Apple AMFI может применять собственную политику независимо.
+
+Это **ABI-совместимо**, но **не security-совместимо** с macOS.
+Подробности и план strict-режима — [`security-policy.md`](security-policy.md).
+
 ## 5. Как проверять совместимость
 
 ### 5.1. Symbol table
