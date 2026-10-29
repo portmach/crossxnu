@@ -117,6 +117,7 @@ upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel
 - [Security policy / политика безопасности](SECURITY.md)
 - [Security policy: подробно](docs/security-policy.md)
 - [Security flags reference](docs/security-flags.md)
+- [DriverKit: отложено до phase 5](docs/driverkit.md)
 - [Release notes и обязательные предупреждения](docs/releases.md)
 - [Сборка на Arch Linux / WSL2](docs/build-arch.md)
 - [Архитектура сборки и замены инструментов](docs/architecture.md)

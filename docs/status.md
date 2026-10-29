@@ -73,13 +73,12 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | DriverKit `OSAction`/IIG-заголовки, новые диагностики clang 23 | расширить permissive DriverKit-заглушки; подавить диагностики | средний: DriverKit ABI |
+| 1 | DriverKit/IIG (`IODMACommand::CompleteDMA` и следующие) | **отложено до phase 5**; см. [`driverkit.md`](driverkit.md) | средний: DriverKit ABI |
 | 2 | `libfirehose_kernel.a` отсутствует | собрать `firehose_buffer.c` из `libdispatch` с MIG-заголовками | нет (код Apple) |
 | 3 | `-lcc_kext` отсутствует | собрать `compiler-rt` builtins под `x86_64-apple-darwin` | нет |
 | 4 | `ld64.lld` не умеет `-static` | обновить LLD / пост-обработка Mach-O / свой упаковщик | **высокий** |
 | 5 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
-| 6 | DriverKit/IIG | IIG или реимплементация | средний (DriverKit ABI) |
-| 7 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
+| 6 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
 
 ## 4. Как воспроизвести текущее состояние
 
@@ -90,11 +89,12 @@ cd crossxnu
 ./scripts/build.sh --arch x86_64 --config RELEASE --jobs "$(nproc)"
 ```
 
-Ожидаемый результат на текущем этапе: сборка доходит до линковки
-`kernel.unstripped.noctf` и останавливается на отсутствующих
-`libfirehose_kernel`/`libcc_kext` и/или флагах `ld64.lld`.
-Это **не** считается успехом phase 1; критерий — готовый Mach-O и
-совпадающая таблица символов.
+Ожидаемый результат на текущем этапе: сборка доходит до
+`iokit/Kernel/IODMACommand.cpp` и останавливается на
+`IODMACommand::CompleteDMA` — это **осознанно отложенный DriverKit**.
+До линковки (`libfirehose_kernel`/`libcc_kext`, `ld64.lld -static`)
+дело пока не доходит. Это **не** считается успехом phase 1; критерий —
+готовый Mach-O и совпадающая таблица символов.
 
 ## 5. Ближайшие шаги
 
