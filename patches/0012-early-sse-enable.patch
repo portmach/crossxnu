@@ -1,0 +1,19 @@
+diff --git a/osfmk/x86_64/start.s b/osfmk/x86_64/start.s
+index ab52abc..2b405a2 100644
+--- a/osfmk/x86_64/start.s
++++ b/osfmk/x86_64/start.s
+@@ -223,6 +223,14 @@ Lvstartshim:
+ 
+ 	/* %edi = boot_args_start */
+ 	
++	/*
++	 * Enable SSE before entering C.  CR4 was overwritten with just PAE
++	 * above; initialize_screen() may use movups/movaps.
++	 */
++	movq	%cr4, %rdx
++	orq	$0x600, %rdx		/* CR4_OSFXS | CR4_OSXMM */
++	movq	%rdx, %cr4
++
+ 	leaq	_vstart(%rip), %rcx
+ 	movq	$(KERNEL_BASE), %rax		/* adjust pointer up high */
+ 	or	%rax, %rsp			/* and stack pointer up there */

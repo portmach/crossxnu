@@ -1,0 +1,41 @@
+diff --git a/osfmk/i386/tsc.c b/osfmk/i386/tsc.c
+index 3addcb6..df2bf46 100644
+--- a/osfmk/i386/tsc.c
++++ b/osfmk/i386/tsc.c
+@@ -202,6 +202,20 @@ tsc_init(void)
+ 			}
+ 		}
+ 
++		/*
++		 * QEMU/TCG may expose a zero CPUID.0x15 denominator.  Fall back
++		 * to the legacy bus-frequency path instead of dividing by zero.
++		 */
++		if (N == 0 || M == 0) {
++			busFreq = EFI_get_frequency("FSBFrequency");
++			if (busFreq == 0) {
++				busFreq = BASE_NHM_CLOCK_SOURCE;
++			}
++			tscFreq = busFreq;
++			tscGranularity = 1;
++			break;
++		}
++
+ 		assert(N != 0);
+ 		assert(M != 1);
+ 		tscFreq = refFreq * N / M;
+@@ -254,6 +268,15 @@ tsc_init(void)
+ 	}
+ 	}
+ 
++	/*
++	 * QEMU/TCG does not expose a valid MSR_PLATFORM_INFO flex ratio.
++	 * Apple hardware always has a non-zero ratio; use 1 instead of
++	 * dividing by zero until a real CPUID-derived estimate is available.
++	 */
++	if (tscGranularity == 0) {
++		tscGranularity = 1;
++	}
++
+ 	if (busFreq != 0) {
+ 		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
+ 		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;

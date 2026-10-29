@@ -69,13 +69,13 @@ build/mig/mig -cc toolchain/bin/clang \
 - [x] cctools-port `ld64` линкует `kernel`:
       `MH_EXECUTE`, `NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`.
 - [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
-- [ ] Ядро ещё не загружено в QEMU.
+- [ ] Ядро доходит до `kalloc_type_distribute_budget()` и падает; см. [`boot.md`](boot.md).
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | Загрузка в QEMU | собрать bootloader/подготовить kernelcache и пройти раннюю инициализацию | **высокий** |
+| 1 | `kalloc_type_distribute_budget()` divide error | разобрать `__kalloc_type`/static KC или собрать `MH_FILESET` | **высокий** |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
@@ -117,3 +117,4 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-29 | Открыты блокеры: `libfirehose_kernel`, `libcc_kext`, `ld64.lld -static` |
 | 2026-10-29 | DriverKit сгенерирован `iig-port`; aliases/`libcc_kext` закрыты; `ld64.lld` дал `DYLDLINK`/нулевой base |
 | 2026-10-29 | cctools-port `ld64` 956.6: `kernel` — `MH_EXECUTE NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`; LTO пока off |
+| 2026-10-29 | UEFI xnu-loader: kernel стартует в QEMU (Skylake-Client); исправлены TSC/SSE/bare-KC; дальше divide в `kalloc_type_distribute_budget` |

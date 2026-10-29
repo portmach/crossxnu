@@ -48,6 +48,10 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0005 | `0005-iokit-and-trap-portability.patch` | fallback в `IOLib.h`; UD1-asm в `trap.h` | **минимальный**: trap-инструкция та же (#UD), проверки типов ослаблены |
 | 0007 | `0007-security-permissive-profile.patch` | permissive TrustCache/CodeSignature под `CROSSXNU_SECURITY_PERMISSIVE` | **security**: проверки отключены, ABI сохранён |
 | 0009 | `0009-iokit-internal-ioservice-include.patch` | полный `IOService` для `IOKitKernelInternal.h` | нет |
+| 0010 | `0010-kextsymboltool-output-file.patch` | `kextsymboltool` пишет во временный файл вместо `/dev/null` | нет |
+| 0011 | `0011-tsc-zero-granularity.patch` | QEMU CPUID.0x15 denominator=0 / flex ratio=0 | низкий: timing |
+| 0012 | `0012-early-sse-enable.patch` | включить CR4.OSFXSR до C-кода | нет |
+| 0013 | `0013-x86-bare-kc-static.patch` | bare `MH_EXECUTE` считать `KCFormatStatic` | средний: KC |
 
 ## 4. Как добавить патч
 

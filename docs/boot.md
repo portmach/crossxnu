@@ -1,0 +1,87 @@
+# Boot в QEMU (phase 1)
+
+**Статус:** ядро доходит до ранней инициализации, но пока падает в
+`kalloc_type_distribute_budget()` (divide error). Полной загрузки нет.
+
+## Схема
+
+```text
+OVMF (edk2-x86_64-code.fd)
+  └─ BOOTX64.EFI  (PureDarwin/xnu-loader)
+       ├─ читает EFI/BOOT/kernel (Mach-O)
+       ├─ строит boot_args, devicetree и EFI memory map
+       ├─ ExitBootServices + SetVirtualAddressMap
+       └─ копирует сегменты на физические адреса
+          и прыгает в XNU `_start` (32-bit compat)
+```
+
+Загрузчик: [`PureDarwin/xnu-loader`](https://github.com/PureDarwin/xnu-loader)
+(BSD-3-Clause), сборка через GNU-EFI.
+
+## Сборка загрузчика
+
+Нужен `gnu-efi` (Arch: `gnu-efi`) и CMake.
+
+```bash
+git clone https://github.com/PureDarwin/xnu-loader.git
+cmake -S xnu-loader -B xnu-loader/build \
+    -DGNU_EFI_DIR=/usr -DARCH=x86_64
+cmake --build xnu-loader/build -j"$(nproc)"
+```
+
+Штатное правило `objcopy --target=efi-app-x86_64` в GNU binutils без
+`--enable-targets` не работает. Рабочий вариант:
+
+```bash
+objcopy -I elf64-x86-64 \
+    -j .text -j .sdata -j .data -j .rodata \
+    -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
+    -O pei-x86-64 --subsystem=efi-app \
+    xnu-loader/build/xnu-loader.so BOOTX64.EFI
+```
+
+## ESP и QEMU
+
+```text
+build/esp/EFI/BOOT/BOOTX64.EFI
+build/esp/EFI/BOOT/kernel
+build/esp/EFI/BOOT/boot-args.txt   # необязательно; сейчас "-v"
+```
+
+QEMU (Windows-сборка; OVMF из `C:\Program Files\qemu\share`):
+
+```powershell
+qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
+  -drive if=pflash,format=raw,readonly=on,file=...\edk2-x86_64-code.fd `
+  -drive if=pflash,format=raw,file=...\esp-vars.fd `
+  -drive file=fat:rw:...\build\esp,format=raw,if=ide `
+  -boot order=c -display none -vga std -serial none `
+  -monitor tcp:0.0.0.0:5555,server,nowait
+```
+
+`-cpu` обязателен: на `qemu64`/`max` XNU падает
+`panic("Unsupported CPU")` в `cpuid_set_info`.
+
+## Что уже проверено
+
+- Загрузчик читает kernel, все сегменты, devicetree и memory map.
+- Переход в `_start` происходит; ядро выполняет раннюю инициализацию.
+- Исправлены три portability-проблемы QEMU:
+  - `CPUID.0x15` denominator = 0 → патч 0011;
+  - SSE-инструкции до `fpu_init` → патч 0012 (CR4.OSFXSR в `start.s`);
+  - x86 bare kernel определяется как `KCFormatDynamic` → патч 0013
+    (для bare `MH_EXECUTE` считаем `KCFormatStatic`).
+- После этого ядро доходит до `kalloc_type_distribute_budget()` и делит
+  на ноль: статический разбор `__kalloc_type` не даёт ни одного view
+  (`total_sig == 0`).
+
+## Следующий шаг
+
+Проверить, почему `kalloc_type_view_parse()` для `KCFormatStatic` видит
+пустые `__kalloc_type`/`__kalloc_var` (секции в kernel есть, см.
+`otool -l`). Варианты:
+
+1. `__kalloc_type` section start/end symbols после cctools link;
+2. формат `kalloc_type_view` в non-LTO сборке;
+3. собрать полноценный `MH_FILESET` kernelcollection через `kc-tools`
+   вместо bare `MH_EXECUTE`.

@@ -117,6 +117,7 @@ upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel
 - [Security policy: подробно](docs/security-policy.md)
 - [Security flags reference](docs/security-flags.md)
 - [DriverKit/IIG: генерация без SDK](docs/driverkit.md)
+- [Boot в QEMU: текущее состояние](docs/boot.md)
 - [Release notes и обязательные предупреждения](docs/releases.md)
 - [Сборка на Arch Linux / WSL2](docs/build-arch.md)
 - [Архитектура сборки и замены инструментов](docs/architecture.md)

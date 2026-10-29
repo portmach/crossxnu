@@ -1,0 +1,19 @@
+diff --git a/pexpert/gen/kcformat.c b/pexpert/gen/kcformat.c
+index a8100f0..63ed6fb 100644
+--- a/pexpert/gen/kcformat.c
++++ b/pexpert/gen/kcformat.c
+@@ -203,7 +203,13 @@ PE_get_primary_kc_format(kc_format_t *type)
+ 				*type = KCFormatKCGEN;
+ 			}
+ #else
+-			*type = KCFormatDynamic;
++			/*
++			 * crossxnu boots a bare MH_EXECUTE kernel, not an MH_FILESET
++			 * kernelcache.  XNU's x86 path otherwise reports Dynamic, which
++			 * kalloc_type_view_parse() does not support.  Treat the bare
++			 * kernel as a static KC until kc-tools/filesets are wired up.
++			 */
++			*type = KCFormatStatic;
+ #endif
+ 		}
+ 	}
