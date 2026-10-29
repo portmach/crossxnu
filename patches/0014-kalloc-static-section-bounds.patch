@@ -1,8 +1,8 @@
 diff --git a/osfmk/kern/kalloc.c b/osfmk/kern/kalloc.c
-index 74b028f..c505cfd 100644
+index 74b028f..a05d4d0 100644
 --- a/osfmk/kern/kalloc.c
 +++ b/osfmk/kern/kalloc.c
-@@ -1040,12 +1040,21 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
+@@ -1040,21 +1040,41 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
  	if (kc_format == KCFormatStatic) {
  		/*
  		 * If kc is static or KCGEN, __kalloc_type sections from kexts and
@@ -29,3 +29,24 @@ index 74b028f..c505cfd 100644
  	} else if (kc_format == KCFormatFileset) {
  		/*
  		 * If kc uses filesets, traverse __kalloc_type section for each
+-		 * macho in the BootKC.
++		 * macho in the BootKC.  A synthetic kc-tools fileset has the
++		 * kernel's sections at the top level and no kernel LC_FILESET_ENTRY,
++		 * so parse the top-level kernel section too.
+ 		 */
+ 		kernel_mach_header_t *kc_mh = NULL;
+ 		kernel_mach_header_t *kext_mh = NULL;
+ 
+ 		kc_mh = (kernel_mach_header_t *)PE_get_kc_header(KCKindPrimary);
++		if (kc_mh == NULL) {
++			kc_mh = &_mh_execute_header;
++		}
++		kernel_section_t *kernel_sect = getsectbynamefromheader(kc_mh,
++		    KALLOC_TYPE_SEGMENT, KALLOC_TYPE_SECTION(type));
++		if (kernel_sect != NULL) {
++			kalloc_type_view_copy(type, kernel_sect->addr,
++			    kernel_sect->addr + kernel_sect->size, &cur_count, false, NULL);
++		}
+ 		struct load_command *lc =
+ 		    (struct load_command *)((vm_offset_t)kc_mh + sizeof(*kc_mh));
+ 		for (uint32_t i = 0; i < kc_mh->ncmds;
