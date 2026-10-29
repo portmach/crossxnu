@@ -9,6 +9,7 @@
 | AvailabilityVersions | `AvailabilityVersions-157.2` / `149b1777f3e8c2133042d8e188f72e3adf6a7110` | `availability.pl` для `sys/_symbol_aliasing.h` | APSL-2.0 |
 | libdispatch | `libdispatch-1542.100.32` / `701f4d1a24ae9c6863901bbbb22624b7d1b87321` | `libfirehose_kernel`, `os/` headers | Apache-2.0 |
 | iig-port | `ea6d147d668ca15d490da638012243fcd705f30d` | portable DriverKit IIG | MIT |
+| cctools-port | `904de2a71d4da6a9b30d2efaf912a10ddc7d9ddb` | Apple cctools/`ld64` 956.6 на Linux | APSL-2.0 |
 
 ## Почему именно 26.5
 

@@ -63,18 +63,20 @@ build/mig/mig -cc toolchain/bin/clang \
 ### 2.4. Компиляция ядра
 
 - [x] Компилируются `osfmk`, `bsd`, `iokit`, `libkern`, `pexpert`,
-      `libsa`, `security` (тысячи объектов; см. лог).
+      `libsa`, `security`, включая сгенерированный DriverKit.
 - [x] `RELEASE`/`x86_64` флаги совпадают с Apple-схемой (`-O2`, `-mkernel`,
       `-fapple-kext`, `-fno-rtti`, `-fno-exceptions`).
-- [ ] Все объекты — в процессе; новые диагностики clang 23
-      подавляются в `scripts/build.sh` (`CFLAGS_EXTRA`).
+- [x] cctools-port `ld64` линкует `kernel`:
+      `MH_EXECUTE`, `NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`.
+- [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
+- [ ] Ядро ещё не загружено в QEMU.
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | Mach-O layout: `__TEXT.vmaddr=0`, флаг `DYLDLINK`, `-static`/`-segaddr`/`-image_base` не реализованы в `ld64.lld` | перейти на cctools-port `ld64` или пост-обработка Mach-O | **высокий** |
-| 2 | DriverKit ABI | `iig-port` уже генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
+| 1 | Загрузка в QEMU | собрать bootloader/подготовить kernelcache и пройти раннюю инициализацию | **высокий** |
+| 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
 | 5 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
@@ -90,22 +92,20 @@ cd crossxnu
 
 Ожидаемый результат на текущем этапе: DriverKit генерируется через
 `iig-port`, все объекты компилируются, `libfirehose_kernel` и
-`libcc_kext`-shim подставляются, **`kernel` линкуется**. Но Mach-O пока
-непригоден для загрузки: `__TEXT.vmaddr=0`, флаг `DYLDLINK`, потому что
-`ld64.lld` игнорирует `-static`/`-segaddr`/`-image_base`. Это **не**
-считается успехом phase 1; критерий — правильный Mach-O и совпадающая
+`libcc_kext`-shim подставляются, cctools-port `ld64` линкует **корректный
+Mach-O kernel**: `MH_EXECUTE`, `NOUNDEFS PIE`, `__TEXT` по адресу
+`0xffffff8000200000`. Это ещё **не** успех phase 1: ядро не загружено,
+symbol table/vtable не сверены с Apple. Критерий — загрузка и совпадающая
 таблица символов.
 
 ## 5. Ближайшие шаги
 
-1. Перейти на cctools-port `ld64` (Apple-совместимый линкер) или
-   пост-обработка Mach-O:
-   - `-static`, `-segaddr`, `-image_base`, `-alias_list`;
-   - убрать `MH_DYLDLINK`/`LC_DYLD_*`, выставить `__TEXT.vmaddr`.
-2. Проверить `kextsymboltool`/symbolsets на реальном `ld64`.
-3. Собрать полноценный `libcc_kext` вместо shim.
-4. Сравнить symbol table и DriverKit vtable с Apple-сборкой
+1. Проверить `kernel` в QEMU: bootloader/kernelcache, ранняя
+   инициализация, вывод `crossxnu: permissive code-signing profile enabled`.
+2. Сравнить symbol table и DriverKit vtable с Apple-сборкой
    `xnu-12377.121.6`.
+3. Собрать полноценный `libcc_kext` вместо shim.
+4. Вернуть LTO после проверки cctools `ld64` (сейчас `BUILD_LTO=0`).
 5. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал
@@ -115,3 +115,5 @@ cd crossxnu
 | 2026-10-29 | Зафиксирован `xnu-12377.121.6`; собран MIG; `make exporthdrs` проходит; начата компиляция объектов |
 | 2026-10-29 | Добавлены fallback'и для Apple builtins; исключён DriverKit; собираются `osfmk`/`bsd`/`iokit` объекты |
 | 2026-10-29 | Открыты блокеры: `libfirehose_kernel`, `libcc_kext`, `ld64.lld -static` |
+| 2026-10-29 | DriverKit сгенерирован `iig-port`; aliases/`libcc_kext` закрыты; `ld64.lld` дал `DYLDLINK`/нулевой base |
+| 2026-10-29 | cctools-port `ld64` 956.6: `kernel` — `MH_EXECUTE NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`; LTO пока off |

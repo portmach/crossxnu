@@ -53,10 +53,10 @@ Apple `iig` — закрытый инструмент из Xcode. В open-source
 
 - DriverKit-файлы компилируются, `IODMACommand::CompleteDMA` и
   `_Methods`-макросы на месте.
-- Ядро **линкуется** (`kernel`/`kernel.unstripped`).
+- Ядро **линкуется** cctools `ld64`: `MH_EXECUTE NOUNDEFS PIE`,
+  `__TEXT=0xffffff8000200000`.
 - `libfirehose_kernel` и `libcc_kext`-shim собираются скриптами.
-- Осталась проблема Mach-O layout (`ld64.lld` игнорирует `-static`,
-  `-segaddr`, `-image_base`), а не IIG.
+- Mach-O layout и IIG больше не блокеры; следующий шаг — QEMU boot.
 
 ## Ограничения
 

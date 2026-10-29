@@ -32,12 +32,14 @@ macOS, без Xcode, без Apple SDK. Все команды выполняют�
 ```bash
 sudo pacman -S --needed \
     base-devel clang lld llvm git python \
+    libdispatch libtool autoconf automake pkgconf \
     bison flex m4 bc rsync cpio xz zstd perl
 ```
 
 | Пакет | Зачем |
 |:------|:------|
-| `clang`, `lld`, `llvm` | целевой компилятор и Mach-O линкер `ld64.lld`; `llvm-ar`, `llvm-strip`, `llvm-nm`, `llvm-otool`, `llvm-lipo`; `libclang` нужен для `iig-port` |
+| `clang`, `lld`, `llvm` | целевой компилятор; `llvm-ar`, `llvm-strip`, `llvm-nm`, `llvm-otool`, `llvm-lipo`; `libclang` нужен для `iig-port` |
+| `libdispatch`, `libtool`, `autoconf`, `automake`, `pkgconf` | сборка cctools-port `ld64`; `libdispatch` также для `libfirehose_kernel` |
 | `make` (base-devel) | сборочная система XNU |
 | `git` | submodules и патчи |
 | `python` | `availability.pl`, вспомогательные скрипты |
@@ -130,10 +132,10 @@ Bootstrap **не** собирает ядро. Это отдельный шаг, 
 > **Текущее ограничение (2026-10-29):** `bootstrap.sh` и
 > `build.sh --target exporthdrs` проходят полностью; `build.sh` без
 > `--target` собирает DriverKit через `iig-port`, `libfirehose_kernel`
-> и `libcc_kext`-shim и **линкует `kernel`**. Но Mach-O пока неверный:
-> `ld64.lld` игнорирует `-static`/`-segaddr`/`-image_base`
-> (`__TEXT.vmaddr=0`, `DYLDLINK`). Это ожидаемое состояние phase 1;
-> см. [`status.md`](status.md).
+> и `libcc_kext`-shim, линкует cctools `ld64` и даёт корректный
+> `MH_EXECUTE NOUNDEFS PIE` с `__TEXT=0xffffff8000200000`. LTO пока
+> выключен (`BUILD_LTO=0`), ядро ещё не загружалось в QEMU. См.
+> [`status.md`](status.md).
 
 ### 4.1. Ручной bootstrap (если скрипт сломался)
 

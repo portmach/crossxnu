@@ -25,7 +25,7 @@ for arg in "$@"; do
 done
 
 if [[ ${link} -eq 1 ]]; then
-    args+=("-fuse-ld=lld" "--ld-path=$(dirname "${BASH_SOURCE[0]}")/ld64.lld")
+    args+=("--ld-path=${CROSSXNU_LD64:-${CROSSXNU_BUILD}/cctools/bin/ld64}")
 fi
 
 exec "${REAL_CC}" -target "${TARGET}" "${args[@]}"

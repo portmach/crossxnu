@@ -58,6 +58,11 @@ case "${CONFIG_UC}" in
     *) echo "error: unsupported configuration ${CONFIG}" >&2; exit 2 ;;
 esac
 
+if [[ ! -x "${CROSSXNU_LD64}" ]]; then
+    echo "error: cctools ld64 missing at ${CROSSXNU_LD64}" >&2
+    echo "       run: ./scripts/build-cctools.sh" >&2
+    exit 1
+fi
 if [[ -z "${CROSSXNU_SDK}" || ! -d "${CROSSXNU_SDK}/usr/local/include/kernel" ]]; then
     echo "error: synthetic SDK missing; run ./scripts/make-sdk.sh" >&2
     exit 1
@@ -127,7 +132,7 @@ make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     MIG="${CROSSXNU_MIGDIR}/mig" \
     MIGCOM="${CROSSXNU_MIGDIR}/migcom" \
     LIBTOOL="${CROSSXNU_TOOLCHAIN}/bin/libtool" \
-    STRIP="${CROSSXNU_TOOLCHAIN}/bin/strip" \
+    STRIP="${CROSSXNU_BUILD}/cctools/bin/strip" \
     NM="${CROSSXNU_TOOLCHAIN}/bin/nm" \
     OTOOL="${CROSSXNU_TOOLCHAIN}/bin/otool" \
     LIPO="${CROSSXNU_TOOLCHAIN}/bin/lipo" \
@@ -151,7 +156,8 @@ make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     KERNEL_CONFIGS="${CONFIG_UC}" \
     RC_DARWIN_KERNEL_VERSION="${CROSSXNU_XNU_VERSION}" \
     CFLAGS_EXTRA="${CFLAGS_EXTRA_VALUE}" \
-    LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64="-Wl,-no_fixup_chains" \
+    BUILD_LTO=0 \
+    LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64="" \
     LD_KERNEL_LIBS="${CROSSXNU_SDK}/usr/local/lib/kernel/libcc_kext.a" \
     "${TARGET}" 2>&1 | tee "${LOG}"
 BUILD_STATUS=${PIPESTATUS[0]}

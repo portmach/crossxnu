@@ -9,6 +9,7 @@
 | AvailabilityVersions | APSL-2.0 | исходники |
 | libdispatch | Apache-2.0 | исходники и производные |
 | iig-port | MIT | исходники и производные |
+| cctools-port | APSL-2.0 (Apple cctools), порт — см. upstream | исходники и производные |
 | libclang (clang) | Apache-2.0 with LLVM exceptions | host-зависимость, не вендорится |
 | Оригинальные скрипты/документы crossxnu | MIT | да |
 

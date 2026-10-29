@@ -13,3 +13,6 @@
 [submodule "upstream/iig-port"]
 	path = upstream/iig-port
 	url = https://github.com/Nyktis/iig-port.git
+[submodule "upstream/cctools-port"]
+	path = upstream/cctools-port
+	url = https://github.com/tpoechtrager/cctools-port.git

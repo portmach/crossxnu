@@ -29,6 +29,7 @@ fi
 "${SCRIPT_DIR}/apply-patches.sh"
 "${SCRIPT_DIR}/build-mig.sh"
 "${SCRIPT_DIR}/build-host-tools.sh"
+"${SCRIPT_DIR}/build-cctools.sh"
 "${SCRIPT_DIR}/make-sdk.sh"
 "${SCRIPT_DIR}/build-iig.sh"
 "${SCRIPT_DIR}/generate-driverkit.sh"
