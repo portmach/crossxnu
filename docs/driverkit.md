@@ -45,11 +45,34 @@ kext’ами** (phase 5), а не сейчас.
 
 - DriverKit `.iig.cpp` и `iokit/DriverKit` исключены из сборки
   (патчи 0002, 0003, 0008).
+- Исключены DriverKit-зависимые IOKit-файлы:
+  `iokit/Kernel/IODMACommand.cpp`,
+  `iokit/Kernel/IOUserClient.cpp`,
+  `iokit/Kernel/IOUserServer.cpp`,
+  `iokit/Kernel/IOExtensiblePaniclog.cpp`.
 - Для permissive-SDK добавлены только безопасные вещи:
-  forward declaration `OSAction`, константы `IODMACommand`, include
-  `IOService.h`, подавление `-Wno-unused-private-field`.
+  forward declaration `OSAction`, константы `IODMACommand`/`IOMemoryDirection`,
+  include `IOService.h`, подавление `-Wno-unused-private-field`.
 - `IODMACommand::CompleteDMA` **не** застаблен: сборка осознанно
   останавливается здесь.
+
+## Следствие для линковки
+
+Из-за исключения `IOUserClient.cpp`/`IOUserServer.cpp` линковка ядра
+закономерно падает на символах вида:
+
+```text
+is_io_iterator_next
+is_io_iterator_reset
+is_io_service_get_matching_services
+is_io_registry_entry_get_property
+is_io_registry_create_iterator
+...
+```
+
+Это **не новая ошибка**: мы сами убрали файлы, которые их реализуют.
+Пока DriverKit/IOKit-часть отложена, полностью слинкованного ядра не
+будет. Это принятое ограничение phase 1, а не регрессия.
 
 ## Последствия
 

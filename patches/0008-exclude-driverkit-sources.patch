@@ -1,5 +1,5 @@
 diff --git a/iokit/conf/files b/iokit/conf/files
-index c72c690..80ba531 100644
+index c72c690..ce2c3f5 100644
 --- a/iokit/conf/files
 +++ b/iokit/conf/files
 @@ -10,24 +10,6 @@ OPTIONS/mach_assert				optional mach_assert
@@ -27,7 +27,29 @@ index c72c690..80ba531 100644
  
  # libIOKit
  
-@@ -111,7 +93,6 @@ iokit/Tests/TestServices/TestIODeviceMemoryRosetta.cpp optional iokitcpp
+@@ -68,7 +50,6 @@ iokit/Kernel/IOTimerEventSource.cpp			optional iokitcpp
+ 
+ # Memory system
+ iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp
+-iokit/Kernel/IODMACommand.cpp				optional iokitcpp
+ iokit/Kernel/IODeviceMemory.cpp				optional iokitcpp
+ iokit/Kernel/IOInterleavedMemoryDescriptor.cpp		optional iokitcpp
+ iokit/Kernel/IOMapper.cpp				optional iokitcpp
+@@ -87,13 +68,11 @@ iokit/Kernel/IOPlatformActions.cpp			optional iokitcpp
+ 
+ iokit/Kernel/IONVRAM.cpp				optional iokitcpp
+ 
+-iokit/Kernel/IOExtensiblePaniclog.cpp   optional iokitcpp
+ 
+ iokit/Kernel/IODMAController.cpp			optional iokitcpp
+ iokit/Kernel/IOInterruptController.cpp			optional iokitcpp
+ iokit/Kernel/PassthruInterruptController.cpp		optional iokitcpp
+ 
+-iokit/Kernel/IOUserClient.cpp				optional iokitcpp
+ 
+ iokit/Kernel/IOKitDebug.cpp				optional iokitcpp
+ iokit/Kernel/IODataQueue.cpp				optional iokitcpp
+@@ -111,7 +90,6 @@ iokit/Tests/TestServices/TestIODeviceMemoryRosetta.cpp optional iokitcpp
  iokit/Tests/TestServices/TestIOUserClient2022Entitlements.cpp optional iokitcpp
  iokit/Tests/TestServices/TestIOServiceUserNotification.cpp optional iokitcpp
  iokit/Tests/TestServices/TestIODataQueues.cpp optional iokitcpp
@@ -35,3 +57,11 @@ index c72c690..80ba531 100644
  iokit/Tests/TestServices/TestDextRematchKernel.cpp optional iokitcpp
  
  iokit/Kernel/IOStatistics.cpp				optional iokitcpp
+@@ -127,7 +105,6 @@ iokit/Kernel/IORTC.cpp				optional iokitcpp
+ 
+ iokit/Kernel/IOStringFuncs.c				standard
+ 
+-iokit/Kernel/IOUserServer.cpp				optional iokitcpp
+ iokit/Kernel/IOProviderPropertyMerger.cpp	optional iokitcpp
+ 
+ # Property tables for kernel-linked objects

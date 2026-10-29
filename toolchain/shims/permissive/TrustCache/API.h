@@ -78,7 +78,7 @@ typedef struct {
 } TCTypeConfigEntry_t;
 
 /* Only compiled by permissive builds; never passed to AMFI. */
-static const TCTypeConfigEntry_t TCTypeConfig[kTCTypeTotal] __attribute__((unused)) = { { 0 } };
+static const TCTypeConfigEntry_t TCTypeConfig[kTCTypeTotal] __attribute__((unused)) = {};
 
 static inline void
 trustCacheInitializeRuntime(TrustCacheRuntime_t *runtime, ...)
