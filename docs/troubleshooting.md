@@ -50,10 +50,10 @@ Upstream clang не имеет Apple-расширений. Патч 0004 даё�
 
 ## `fatal error: 'TrustCache/API.h' file not found`
 
-XNU 26.5 включает `EXTERNAL_HEADERS/TrustCache/*` из отдельного
-компонента, которого нет в GitHub-дереве XNU. Это известный блокер
-phase 1 (см. `status.md`). Нужно добавить `TrustCache` в synthetic SDK
-из открытого источника или реализовать совместимый заголовок.
+В permissive-сборке используется `toolchain/shims/permissive/TrustCache/API.h`
+(см. `--security permissive`). Если файл всё ещё не найден — проверьте,
+что `CFLAGS_EXTRA` содержит `-I.../toolchain/shims/permissive`.
+Strict-сборка требует настоящий заголовок из SDK 26.5.
 
 ## `fatal error: 'os/firehose_buffer_private.h' file not found`
 

@@ -129,9 +129,10 @@ Bootstrap **не** собирает ядро. Это отдельный шаг, 
 
 > **Текущее ограничение (2026-10-29):** `bootstrap.sh` и
 > `build.sh --target exporthdrs` проходят полностью; `build.sh` без
-> `--target` доходит до компиляции объектов и останавливается на
-> отсутствующих `TrustCache/API.h` / `CodeSignature/Entitlements.h`
-> и на линковке (`libfirehose_kernel`, `libcc_kext`, `ld64.lld -static`).
+> `--target` доходит до компиляции объектов; permissive-shims снимают проблему
+> `TrustCache`/`CodeSignature` без SDK, но остаются DriverKit-заглушки,
+> новые диагностики clang и линковка (`libfirehose_kernel`, `libcc_kext`,
+> `ld64.lld -static`).
 > Это ожидаемое состояние phase 1; см. [`status.md`](status.md).
 
 ### 4.1. Ручной bootstrap (если скрипт сломался)

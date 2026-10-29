@@ -15,8 +15,10 @@
 > enforcement entitlements. Любой код, который загрузится, считается
 > доверенным; это **небезопасно** и **не предназначено для production**.
 >
-> Это осознанное решение phase 1, а не баг сборки. Подробности, границы
-> режима и план перехода к strict — в [`SECURITY.md`](SECURITY.md) и
+> Это осознанное решение phase 1, а не баг сборки. Для permissive-режима
+> используются SDK-free заглушки [`toolchain/shims/permissive`](toolchain/shims/permissive);
+> полный Apple SDK не требуется. Подробности, границы режима и план
+> перехода к strict — в [`SECURITY.md`](SECURITY.md) и
 > [`docs/security-policy.md`](docs/security-policy.md).
 
 ## Базовая версия

@@ -87,9 +87,15 @@ CFLAGS_EXTRA_VALUE+=" -Wno-unused-but-set-variable"
 CFLAGS_EXTRA_VALUE+=" -Wno-unused-but-set-global"
 CFLAGS_EXTRA_VALUE+=" -Wno-void-pointer-to-int-cast"
 CFLAGS_EXTRA_VALUE+=" -Wno-pointer-to-int-cast"
+CFLAGS_EXTRA_VALUE+=" -Wno-implicit-int-float-conversion"
+CFLAGS_EXTRA_VALUE+=" -Wno-vla"
+CFLAGS_EXTRA_VALUE+=" -Wno-gnu-folding-constant"
 CFLAGS_EXTRA_VALUE+=" -DOS_FIREHOSE_SPI=1"
 CFLAGS_EXTRA_VALUE+=" -DOS_VOUCHER_ACTIVITY_SPI_TYPES=1"
 CFLAGS_EXTRA_VALUE+=" -DCROSSXNU_SECURITY_PERMISSIVE=${SECURITY_PERMISSIVE}"
+if [[ "${SECURITY}" == "permissive" ]]; then
+    CFLAGS_EXTRA_VALUE+=" -I${CROSSXNU_TOOLCHAIN}/shims/permissive"
+fi
 
 if [[ -z "${LOG}" ]]; then
     mkdir -p "${CROSSXNU_BUILD}/log"

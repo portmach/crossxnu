@@ -12,12 +12,27 @@ crossxnu. **Все они относятся к security-политике, а н
 | `CROSSXNU_SECURITY_PERMISSIVE` | C-препроцессор | `0`/`1` | включает permissive-ветки в `kern_codesigning.c`, `kern_trustcache.c`, `ubc_subr.c` |
 | `CFLAGS_EXTRA` | XNU make | строка | сюда build.sh добавляет `-DCROSSXNU_SECURITY_PERMISSIVE=...`; вручную не задавайте, используйте `--security` |
 | `CROSSXNU_SDK` | окружение | путь | synthetic SDK; не security-флаг, но от него зависит сборка `TrustCache`/`CodeSignature` |
+| `-I toolchain/shims/permissive` | `CFLAGS_EXTRA` (permissive) | путь | SDK-free заглушки `TrustCache/API.h`, `CodeSignature/Entitlements.h`, `CoreEntitlements/V2/*` |
 
 `CROSSXNU_SECURITY_PERMISSIVE=1` **не** вырезает код: `cs_*` syscalls,
 `cs_blob`, entitlements parser и AMFI-интерфейс остаются. Меняются только
 решения «доверять/не доверять».
 
-## 2. XNU `CS_CONFIG_*` (биты `cs_config`)
+## 2. SDK-free permissive shims
+
+`toolchain/shims/permissive/` содержит **не-Abi** заглушки, которые
+подключаются только при `--security permissive`:
+
+| Файл | Что даёт | Опасность |
+|:-----|:---------|:----------|
+| `TrustCache/API.h` | opaque-типы и константы, достаточные для компиляции `kern_trustcache.c` | нельзя передавать в настоящий AMFI; в permissive код до AMFI не доходит |
+| `CodeSignature/Entitlements.h` | четыре browser-entitlement строки | строки нужно сверить с 26.5; при permissive enforcement всё равно выключен |
+| `CoreEntitlements/V2/API.h` | использует V1-типы XNU + opaque `CEKernelAPI_t` | AMFI с V2-интерфейсом не должен вызываться |
+
+Это не замена SDK для strict-режима. Для strict нужны настоящие
+заголовки 26.5; иначе layout/строки могут разойтись.
+
+## 3. XNU `CS_CONFIG_*` (биты `cs_config`)
 
 Определены в `bsd/sys/code_signing.h`. В permissive-сборке патч 0007
 выставляет их в `code_signing_configuration()`.
@@ -43,7 +58,7 @@ crossxnu. **Все они относятся к security-политике, а н
 «подпись валидна», а «проверку можно не делать». `csops` и другие
 потребители всё равно получают согласованные флаги/структуры.
 
-## 3. Boot-args XNU (только DEVELOPMENT/DEBUG)
+## 4. Boot-args XNU (только DEVELOPMENT/DEBUG)
 
 Эти аргументы парсятся в `kern_codesigning.c` под `#if DEVELOPMENT || DEBUG`.
 В **RELEASE** они не действуют; для RELEASE permissive используется
@@ -66,7 +81,7 @@ crossxnu. **Все они относятся к security-политике, а н
 Это **Apple-флаги**, а не интерфейс crossxnu. AMFI kext может иметь свои
 собственные boot-args; они могут применяться независимо.
 
-## 4. TrustCache (permissive)
+## 5. TrustCache (permissive)
 
 Патч 0007 в permissive-режиме:
 
@@ -84,11 +99,11 @@ crossxnu. **Все они относятся к security-политике, а н
 является ограничением. AMFI, если загружен, может всё равно применять
 свою политику; permissive-ядро её не отменяет.
 
-## 5. CodeSignature (permissive)
+## 6. CodeSignature (permissive)
 
 Патч 0007:
 
-- `code_signing_configuration()` выставляет биты из §2;
+- `code_signing_configuration()` выставляет биты из §3;
 - `startup.c` отключает `AMFI_bootarg_disable_mach_hardening`;
 - `kern_cs.c`/`ubc_subr.c` не паникуют, если AMFI отсутствует;
 - entitlements parser остаётся; `cs_*` и `cs_blob` не меняются.
@@ -100,7 +115,7 @@ crossxnu. **Все они относятся к security-политике, а н
 - не гарантирует запуск Apple-приложений без trust caches;
 - не делает систему безопасной.
 
-## 6. Планируемый runtime-флаг
+## 7. Планируемый runtime-флаг
 
 В phase 2 появится единый boot-arg:
 
@@ -121,7 +136,7 @@ kern.crossxnu.security: permissive
   permissive — обязательное условие; boot-arg может только ужесточать
   или подтверждать).
 
-## 7. Что выбрать
+## 8. Что выбрать
 
 | Задача | Флаги |
 |:-------|:------|

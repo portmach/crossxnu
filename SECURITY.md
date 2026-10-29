@@ -37,6 +37,10 @@ TrustCache — **часть** CodeSignature/AMFI, а не отдельная «�
 
 - [x] Решение: phase 1 — permissive.
 - [x] README/документация предупреждают.
+- [x] Патч 0007: `CROSSXNU_SECURITY_PERMISSIVE` в XNU; сборка
+      `--security permissive`.
+- [x] SDK-free permissive shims (`toolchain/shims/permissive`) для
+      `TrustCache`/`CodeSignature`/`CoreEntitlements V2`.
 - [ ] Runtime-реализация permissive (ядро ещё не линкуется/не грузится).
 - [ ] Единый boot-arg `crossxnu.security=permissive`.
 - [ ] Замена Apple AMFI на собственный провайдер или явная политика

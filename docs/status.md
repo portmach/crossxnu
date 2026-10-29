@@ -73,7 +73,7 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `TrustCache/API.h` и `CodeSignature/Entitlements.h` отсутствуют в GitHub-дереве XNU | добавить открытые заголовки/совместимый shim в synthetic SDK | средний: структуры pmap_cs/AMFI |
+| 1 | DriverKit `OSAction`/IIG-заголовки, новые диагностики clang 23 | расширить permissive DriverKit-заглушки; подавить диагностики | средний: DriverKit ABI |
 | 2 | `libfirehose_kernel.a` отсутствует | собрать `firehose_buffer.c` из `libdispatch` с MIG-заголовками | нет (код Apple) |
 | 3 | `-lcc_kext` отсутствует | собрать `compiler-rt` builtins под `x86_64-apple-darwin` | нет |
 | 4 | `ld64.lld` не умеет `-static` | обновить LLD / пост-обработка Mach-O / свой упаковщик | **высокий** |
