@@ -1,0 +1,12 @@
+diff --git a/iokit/Kernel/IOKitKernelInternal.h b/iokit/Kernel/IOKitKernelInternal.h
+index b33a663..d79c883 100644
+--- a/iokit/Kernel/IOKitKernelInternal.h
++++ b/iokit/Kernel/IOKitKernelInternal.h
+@@ -38,6 +38,7 @@ __BEGIN_DECLS
+ #include <mach/memory_object_types.h>
+ #include <device/device_port.h>
+ #include <IOKit/IODMACommand.h>
++#include <IOKit/IOService.h>
+ #include <IOKit/IOKitServer.h>
+ #include <kern/socd_client.h>
+ 

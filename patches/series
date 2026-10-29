@@ -8,3 +8,4 @@
 0006-osmetaclass-dispatch-injection.patch
 0007-security-permissive-profile.patch
 0008-exclude-driverkit-sources.patch
+0009-iokit-internal-ioservice-include.patch
