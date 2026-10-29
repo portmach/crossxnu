@@ -33,6 +33,7 @@ fi
 "${SCRIPT_DIR}/build-iig.sh"
 "${SCRIPT_DIR}/generate-driverkit.sh"
 "${SCRIPT_DIR}/build-firehose.sh"
+"${SCRIPT_DIR}/build-cc-kext.sh"
 
 cat <<EOF
 

@@ -151,7 +151,8 @@ make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     KERNEL_CONFIGS="${CONFIG_UC}" \
     RC_DARWIN_KERNEL_VERSION="${CROSSXNU_XNU_VERSION}" \
     CFLAGS_EXTRA="${CFLAGS_EXTRA_VALUE}" \
-    LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64="" \
+    LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64="-Wl,-no_fixup_chains" \
+    LD_KERNEL_LIBS="${CROSSXNU_SDK}/usr/local/lib/kernel/libcc_kext.a" \
     "${TARGET}" 2>&1 | tee "${LOG}"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e

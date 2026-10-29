@@ -129,10 +129,11 @@ Bootstrap **не** собирает ядро. Это отдельный шаг, 
 
 > **Текущее ограничение (2026-10-29):** `bootstrap.sh` и
 > `build.sh --target exporthdrs` проходят полностью; `build.sh` без
-> `--target` собирает DriverKit через `iig-port` и `libfirehose_kernel`,
-> доходит до `ld64.lld` и падает на runtime-символах
-> (`libcc_kext`, `__llvm_profile_*`, `vm_allocate`).
-> Это ожидаемое состояние phase 1; см. [`status.md`](status.md).
+> `--target` собирает DriverKit через `iig-port`, `libfirehose_kernel`
+> и `libcc_kext`-shim и **линкует `kernel`**. Но Mach-O пока неверный:
+> `ld64.lld` игнорирует `-static`/`-segaddr`/`-image_base`
+> (`__TEXT.vmaddr=0`, `DYLDLINK`). Это ожидаемое состояние phase 1;
+> см. [`status.md`](status.md).
 
 ### 4.1. Ручной bootstrap (если скрипт сломался)
 

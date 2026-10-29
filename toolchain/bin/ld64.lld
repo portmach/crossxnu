@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ld64.lld wrapper: translate ld64's -alias_list into lld -alias flags.
+#
+# XNU's kernel link relies on all-alias.exp for legacy symbol aliases
+# (vm_allocate -> vm_allocate_external, etc.).  ld64.lld ignores -alias_list,
+# so translate it instead of dropping the aliases.
+set -euo pipefail
+
+REAL_LD="${CROSSXNU_REAL_LD64_LLD:-/usr/sbin/ld64.lld}"
+args=()
+i=0
+while (($#)); do
+    case "$1" in
+        -alias_list)
+            file="${2:?missing -alias_list argument}"
+            shift 2
+            while read -r from to rest; do
+                [[ -z "${from:-}" || "${from:0:1}" == "#" ]] && continue
+                [[ -z "${to:-}" ]] && continue
+                args+=("-alias" "${from}" "${to}")
+            done < "${file}"
+            ;;
+        *)
+            args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+exec "${REAL_LD}" "${args[@]}"

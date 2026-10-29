@@ -53,10 +53,10 @@ Apple `iig` — закрытый инструмент из Xcode. В open-source
 
 - DriverKit-файлы компилируются, `IODMACommand::CompleteDMA` и
   `_Methods`-макросы на месте.
-- Ядро доходит до линковки.
-- `libfirehose_kernel` собирается скриптом.
-- Остались обычные link-проблемы (`libcc_kext`, `__llvm_profile_*`,
-  `vm_allocate`/`mach_vm_deallocate`), а не отсутствие IIG.
+- Ядро **линкуется** (`kernel`/`kernel.unstripped`).
+- `libfirehose_kernel` и `libcc_kext`-shim собираются скриптами.
+- Осталась проблема Mach-O layout (`ld64.lld` игнорирует `-static`,
+  `-segaddr`, `-image_base`), а не IIG.
 
 ## Ограничения
 

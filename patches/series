@@ -7,3 +7,4 @@
 0005-iokit-and-trap-portability.patch
 0007-security-permissive-profile.patch
 0009-iokit-internal-ioservice-include.patch
+0010-kextsymboltool-output-file.patch

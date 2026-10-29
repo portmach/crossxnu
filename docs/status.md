@@ -73,9 +73,9 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `__cxa_atexit`, `__llvm_profile_*`, `vm_allocate`, `mach_vm_deallocate` | `libcc_kext`/compiler-rt runtime и проверка link-набора | средний (C++ runtime) |
+| 1 | Mach-O layout: `__TEXT.vmaddr=0`, флаг `DYLDLINK`, `-static`/`-segaddr`/`-image_base` не реализованы в `ld64.lld` | перейти на cctools-port `ld64` или пост-обработка Mach-O | **высокий** |
 | 2 | DriverKit ABI | `iig-port` уже генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
-| 3 | `ld64.lld` не умеет `-static` | обновить LLD / пост-обработка Mach-O / свой упаковщик | **высокий** |
+| 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
 | 5 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
 
@@ -89,26 +89,24 @@ cd crossxnu
 ```
 
 Ожидаемый результат на текущем этапе: DriverKit генерируется через
-`iig-port`, все объекты компилируются, `libfirehose_kernel` собирается,
-линковка доходит до `ld64.lld` и падает на runtime-символах
-(`__cxa_atexit`, `__llvm_profile_*`, `vm_allocate`,
-`mach_vm_deallocate`). Это **не** считается успехом phase 1; критерий —
-готовый Mach-O и совпадающая таблица символов.
+`iig-port`, все объекты компилируются, `libfirehose_kernel` и
+`libcc_kext`-shim подставляются, **`kernel` линкуется**. Но Mach-O пока
+непригоден для загрузки: `__TEXT.vmaddr=0`, флаг `DYLDLINK`, потому что
+`ld64.lld` игнорирует `-static`/`-segaddr`/`-image_base`. Это **не**
+считается успехом phase 1; критерий — правильный Mach-O и совпадающая
+таблица символов.
 
 ## 5. Ближайшие шаги
 
-1. Собрать `libcc_kext.a`/compiler-rt runtime:
-   - `__cxa_atexit`, `__llvm_profile_*`;
-   - проверить, какие builtins реально нужны ядру.
-2. Разобраться с `vm_allocate`/`mach_vm_deallocate`: проверить, не
-   выпали ли объекты VM из link-набора (символы должны быть в XNU).
-3. Довести `ld64.lld`-линковку:
-   - `-static` пока только warning, но формат может быть неверным;
-   - при необходимости — пост-обработка Mach-O (убрать `LC_DYLD_*`,
-     `MH_DYLDLINK`).
+1. Перейти на cctools-port `ld64` (Apple-совместимый линкер) или
+   пост-обработка Mach-O:
+   - `-static`, `-segaddr`, `-image_base`, `-alias_list`;
+   - убрать `MH_DYLDLINK`/`LC_DYLD_*`, выставить `__TEXT.vmaddr`.
+2. Проверить `kextsymboltool`/symbolsets на реальном `ld64`.
+3. Собрать полноценный `libcc_kext` вместо shim.
 4. Сравнить symbol table и DriverKit vtable с Apple-сборкой
    `xnu-12377.121.6`.
-6. Повторить для `DEVELOPMENT`, затем для `arm64`.
+5. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал
 
