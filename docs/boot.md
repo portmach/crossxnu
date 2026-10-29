@@ -88,13 +88,16 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
 
 `kc-builder` делает `MH_FILESET` с флагом `MH_DYLIB_IN_CACHE`;
 загрузчик это уже понимает (`KC_hdrs_vaddr`). Проверка fileset в QEMU
-дала **ту же** панику `kalloc_type_distribute_budget()`: разбор
-верхнеуровневой `__kalloc_type` для fileset не даёт views. Патч 0015
-добавляет разбор top-level kernel-секции, но деление всё ещё
-воспроизводится.
+дала **ту же** панику `kalloc_type_distribute_budget()`.
 
-Следующий шаг — kext-entry для kernel, реальные kext’ы в KC или
-отладка `kalloc_type_view_copy()`.
+Диагностика через QEMU monitor: `kt_count = 8` (var views),
+`kt_freq_list[0] = 1`, `kt_freq_list_total` полностью нулевой. Секция
+`__kalloc_type` непустая, первые записи выглядят валидно
+(`kt_flags=0x806c`, `kt_size=0x30`). То есть проблема уже в
+`kalloc_type_view_copy()`/`kt_buffer`, а не в отсутствии секции.
+
+Следующий шаг — инструментировать `kalloc_type_view_copy()` и
+`kalloc_type_handle_parray_var()`, а не добавлять новые section-патчи.
 
 ## Bare-путь (экспериментально)
 
