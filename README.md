@@ -96,9 +96,8 @@ upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel
 
 1. **Исходники ядра не вырезаются.** Патчи касаются сборочной системы,
    host-инструментов и нескольких мест, где Apple-компилятор предоставляет
-   нестандартные builtin'ы. Компоненты, не входящие в ядро macOS
-   (DriverKit, Exclaves), исключены из первой сборки, но их исходники
-   остаются в дереве.
+   нестандартные builtin'ы. DriverKit генерируется portable IIG
+   (`iig-port`), Exclaves пока исключены; исходники остаются в дереве.
 2. **Целевой ABI не меняется.** Используются те же `-D`-определения,
    `-O2`, `-mkernel`, `-fapple-kext`, `-fno-rtti`, `-fno-exceptions`,
    тот же `xnu-12377.121.6`, те же таблицы syscall/Mach trap.
@@ -117,7 +116,7 @@ upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel
 - [Security policy / политика безопасности](SECURITY.md)
 - [Security policy: подробно](docs/security-policy.md)
 - [Security flags reference](docs/security-flags.md)
-- [DriverKit: отложено до phase 5](docs/driverkit.md)
+- [DriverKit/IIG: генерация без SDK](docs/driverkit.md)
 - [Release notes и обязательные предупреждения](docs/releases.md)
 - [Сборка на Arch Linux / WSL2](docs/build-arch.md)
 - [Архитектура сборки и замены инструментов](docs/architecture.md)

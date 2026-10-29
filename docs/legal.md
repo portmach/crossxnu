@@ -8,6 +8,8 @@
 | bootstrap_cmds (MIG) | APSL-2.0 | исходники и производные |
 | AvailabilityVersions | APSL-2.0 | исходники |
 | libdispatch | Apache-2.0 | исходники и производные |
+| iig-port | MIT | исходники и производные |
+| libclang (clang) | Apache-2.0 with LLVM exceptions | host-зависимость, не вендорится |
 | Оригинальные скрипты/документы crossxnu | MIT | да |
 
 Патчи crossxnu — производные от XNU и распространяются под APSL-2.0.

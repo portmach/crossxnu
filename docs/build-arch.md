@@ -37,7 +37,7 @@ sudo pacman -S --needed \
 
 | Пакет | Зачем |
 |:------|:------|
-| `clang`, `lld`, `llvm` | целевой компилятор и Mach-O линкер `ld64.lld`; `llvm-ar`, `llvm-strip`, `llvm-nm`, `llvm-otool`, `llvm-lipo` |
+| `clang`, `lld`, `llvm` | целевой компилятор и Mach-O линкер `ld64.lld`; `llvm-ar`, `llvm-strip`, `llvm-nm`, `llvm-otool`, `llvm-lipo`; `libclang` нужен для `iig-port` |
 | `make` (base-devel) | сборочная система XNU |
 | `git` | submodules и патчи |
 | `python` | `availability.pl`, вспомогательные скрипты |
@@ -129,10 +129,9 @@ Bootstrap **не** собирает ядро. Это отдельный шаг, 
 
 > **Текущее ограничение (2026-10-29):** `bootstrap.sh` и
 > `build.sh --target exporthdrs` проходят полностью; `build.sh` без
-> `--target` доходит до компиляции объектов; permissive-shims снимают проблему
-> `TrustCache`/`CodeSignature` без SDK, но остаются DriverKit-заглушки,
-> новые диагностики clang и линковка (`libfirehose_kernel`, `libcc_kext`,
-> `ld64.lld -static`).
+> `--target` собирает DriverKit через `iig-port` и `libfirehose_kernel`,
+> доходит до `ld64.lld` и падает на runtime-символах
+> (`libcc_kext`, `__llvm_profile_*`, `vm_allocate`).
 > Это ожидаемое состояние phase 1; см. [`status.md`](status.md).
 
 ### 4.1. Ручной bootstrap (если скрипт сломался)

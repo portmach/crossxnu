@@ -13,3 +13,7 @@ upstream/xnu/BUILD/
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# Generated DriverKit IIG implementations
+upstream/xnu/iokit/DriverKit/*.iig.cpp
+upstream/xnu/iokit/Tests/TestServices/TestDextRematch.iig.cpp

@@ -73,12 +73,11 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | DriverKit/IIG; DriverKit-зависимые IOKit-файлы исключены | **отложено до phase 5**; см. [`driverkit.md`](driverkit.md) | средний: DriverKit ABI |
-| 2 | `libfirehose_kernel.a` | собирается вручную (`firehose_buffer.c` + MIG); нужен скрипт | нет (код Apple) |
-| 3 | `-lcc_kext` отсутствует | собрать `compiler-rt` builtins под `x86_64-apple-darwin` | нет |
-| 4 | `ld64.lld` не умеет `-static` | обновить LLD / пост-обработка Mach-O / свой упаковщик | **высокий** |
-| 5 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
-| 6 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
+| 1 | `__cxa_atexit`, `__llvm_profile_*`, `vm_allocate`, `mach_vm_deallocate` | `libcc_kext`/compiler-rt runtime и проверка link-набора | средний (C++ runtime) |
+| 2 | DriverKit ABI | `iig-port` уже генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
+| 3 | `ld64.lld` не умеет `-static` | обновить LLD / пост-обработка Mach-O / свой упаковщик | **высокий** |
+| 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
+| 5 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
 
 ## 4. Как воспроизвести текущее состояние
 
@@ -89,26 +88,26 @@ cd crossxnu
 ./scripts/build.sh --arch x86_64 --config RELEASE --jobs "$(nproc)"
 ```
 
-Ожидаемый результат на текущем этапе: компиляция всех неисключённых
-объектов проходит, линковка доходит до `ld64.lld` и падает на
-`is_io_*`-символах, потому что `IOUserClient.cpp`/`IOUserServer.cpp`
-исключены вместе с DriverKit. `libfirehose_kernel` при этом уже
-подставляется. Это **не** считается успехом phase 1; критерий —
+Ожидаемый результат на текущем этапе: DriverKit генерируется через
+`iig-port`, все объекты компилируются, `libfirehose_kernel` собирается,
+линковка доходит до `ld64.lld` и падает на runtime-символах
+(`__cxa_atexit`, `__llvm_profile_*`, `vm_allocate`,
+`mach_vm_deallocate`). Это **не** считается успехом phase 1; критерий —
 готовый Mach-O и совпадающая таблица символов.
 
 ## 5. Ближайшие шаги
 
-1. Собрать `libfirehose_kernel.a`:
-   - MIG для `firehose.defs`/`firehose_reply.defs`;
-   - `firehose_buffer.c` с `-DKERNEL=1`;
-   - положить в `build/sdk/usr/local/lib/kernel/`.
-2. Собрать `libcc_kext.a` из compiler-rt builtins.
+1. Собрать `libcc_kext.a`/compiler-rt runtime:
+   - `__cxa_atexit`, `__llvm_profile_*`;
+   - проверить, какие builtins реально нужны ядру.
+2. Разобраться с `vm_allocate`/`mach_vm_deallocate`: проверить, не
+   выпали ли объекты VM из link-набора (символы должны быть в XNU).
 3. Довести `ld64.lld`-линковку:
-   - проверить `-static`/`-add_split_seg_info`/`-kernel`;
+   - `-static` пока только warning, но формат может быть неверным;
    - при необходимости — пост-обработка Mach-O (убрать `LC_DYLD_*`,
      `MH_DYLDLINK`).
-4. Сравнить symbol table с Apple-сборкой `xnu-12377.121.6`.
-5. Вернуть DriverKit/Exclaves после появления IIG или замены.
+4. Сравнить symbol table и DriverKit vtable с Apple-сборкой
+   `xnu-12377.121.6`.
 6. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал

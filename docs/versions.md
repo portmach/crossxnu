@@ -8,6 +8,7 @@
 | bootstrap_cmds | `bootstrap_cmds-138` / `c71d2d72f48995baaea76148f61002e5299841de` | MIG (`mig`, `migcom`) | APSL-2.0 |
 | AvailabilityVersions | `AvailabilityVersions-157.2` / `149b1777f3e8c2133042d8e188f72e3adf6a7110` | `availability.pl` для `sys/_symbol_aliasing.h` | APSL-2.0 |
 | libdispatch | `libdispatch-1542.100.32` / `701f4d1a24ae9c6863901bbbb22624b7d1b87321` | `libfirehose_kernel`, `os/` headers | Apache-2.0 |
+| iig-port | `ea6d147d668ca15d490da638012243fcd705f30d` | portable DriverKit IIG | MIT |
 
 ## Почему именно 26.5
 

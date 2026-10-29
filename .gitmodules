@@ -10,3 +10,6 @@
 [submodule "upstream/libdispatch"]
 	path = upstream/libdispatch
 	url = https://github.com/apple-oss-distributions/libdispatch.git
+[submodule "upstream/iig-port"]
+	path = upstream/iig-port
+	url = https://github.com/Nyktis/iig-port.git
