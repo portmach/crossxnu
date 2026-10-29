@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Host C compiler driver for XNU's build-time tools.
+# XNU's host-tool makefiles assume a macOS clang and pass -isysroot,
+# -mmacosx-version-min and -arch.  Those are meaningless for an ELF host
+# tool, so strip them and let the native compiler build for the host.
+set -euo pipefail
+
+REAL_CC="${CROSSXNU_REAL_HOST_CLANG:-/usr/bin/clang}"
+TOOLCHAIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+args=()
+link=1
+skip=0
+for arg in "$@"; do
+    if [[ ${skip} -eq 1 ]]; then
+        skip=0
+        continue
+    fi
+    case "${arg}" in
+        -isysroot)                  skip=1 ;;
+        -isysroot=*)                ;;
+        -mmacosx-version-min=*)     ;;
+        -mios-version-min=*)        ;;
+        -arch)                      skip=1 ;;
+        -arch=*)                    ;;
+        -mkernel)                   ;;
+        -c|-E|-S|-M|-MM)            link=0; args+=("${arg}") ;;
+        *)                          args+=("${arg}") ;;
+    esac
+done
+
+args+=("-I${TOOLCHAIN_ROOT}/include")
+if [[ -n "${CROSSXNU_SDK:-}" ]]; then
+    args+=("-I${CROSSXNU_SDK}/usr/include")
+fi
+if [[ -n "${CROSSXNU_XNU:-}" ]]; then
+    args+=("-I${CROSSXNU_XNU}/EXTERNAL_HEADERS")
+fi
+
+args+=("-include" "${TOOLCHAIN_ROOT}/include/libc.h")
+
+if [[ ${link} -eq 1 ]]; then
+    args+=("-L${TOOLCHAIN_ROOT}/lib" "-lhostcompat")
+fi
+
+exec "${REAL_CC}" "${args[@]}"

@@ -1,0 +1,65 @@
+diff --git a/Makefile b/Makefile
+index d1aaba5..6af91fe 100644
+--- a/Makefile
++++ b/Makefile
+@@ -143,8 +143,10 @@ installsrc:
+ 
+ else ifneq ($(findstring xnu_tests,$(RC_ProjectName)),)
+ 
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++SYSCTL_HW_PHYSICALCPU ?= 1
++SYSCTL_HW_LOGICALCPU ?= 1
++export SYSCTL_HW_PHYSICALCPU
++export SYSCTL_HW_LOGICALCPU
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -160,8 +162,10 @@ installsrc:
+ 
+ else ifeq ($(RC_ProjectName),xnu_tests_driverkit)
+ 
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++SYSCTL_HW_PHYSICALCPU ?= 1
++SYSCTL_HW_LOGICALCPU ?= 1
++export SYSCTL_HW_PHYSICALCPU
++export SYSCTL_HW_LOGICALCPU
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -193,8 +197,10 @@ endif
+ # CPUs. If the system does not support SMT, use N+1.
+ # If MAKEJOBS or -jN is passed on the make line, that takes precedence.
+ #
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++SYSCTL_HW_PHYSICALCPU ?= 1
++SYSCTL_HW_LOGICALCPU ?= 1
++export SYSCTL_HW_PHYSICALCPU
++export SYSCTL_HW_LOGICALCPU
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ TOP_TARGETS = \
+diff --git a/makedefs/MakeInc.top b/makedefs/MakeInc.top
+index 964d522..dc4b0bc 100644
+--- a/makedefs/MakeInc.top
++++ b/makedefs/MakeInc.top
+@@ -298,7 +298,7 @@ endif
+ # $(warning PRIMARY_KERNEL_CONFIGS is $(PRIMARY_KERNEL_CONFIGS))
+ # $(warning VARIANT_CONFIGS is $(VARIANT_CONFIGS))
+ 
+-MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
++MEMORY_SIZE ?= 8589934592
+ 
+ # Assume LTO scaling by default, unless it is being explicitly passed on the command-line
+ LARGE_BUILD_FOOTPRINT := $(if $(BUILD_LTO),$(BUILD_LTO),1)
+@@ -309,7 +309,7 @@ else
+ RAM_PER_KERNEL_BUILD := 268435456
+ endif
+ 
+-KERNEL_BUILDS_IN_PARALLEL := $(shell if [ $(MEMORY_SIZE) -le $$((1 * $(RAM_PER_KERNEL_BUILD))) ]; then echo 1; elif [ $(MEMORY_SIZE) -gt $$(($(SYSCTL_HW_PHYSICALCPU) * $(RAM_PER_KERNEL_BUILD))) ]; then echo $(SYSCTL_HW_PHYSICALCPU); else expr $(MEMORY_SIZE) / $(RAM_PER_KERNEL_BUILD); fi )
++KERNEL_BUILDS_IN_PARALLEL ?= 1
+ # $(warning Building $(KERNEL_BUILDS_IN_PARALLEL) kernels in parallel)
+ 
+ #

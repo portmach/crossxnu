@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Minimal xcrun replacement for cross-building XNU on non-Apple hosts.
+# Only the queries used by XNU's makefiles are implemented.
+set -euo pipefail
+
+TOOLCHAIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SDK="${CROSSXNU_SDK:-${TOOLCHAIN_ROOT}/../sdk/MacOSX.sdk}"
+SDK_VERSION="${CROSSXNU_SDK_VERSION:-26.5}"
+
+find_tool() {
+    local name="$1"
+    case "${name}" in
+        clang)              echo "${TOOLCHAIN_ROOT}/bin/clang" ;;
+        clang++)            echo "${TOOLCHAIN_ROOT}/bin/clang++" ;;
+        cc)                 echo "${TOOLCHAIN_ROOT}/bin/clang" ;;
+        c++)                echo "${TOOLCHAIN_ROOT}/bin/clang++" ;;
+        mig)                echo "${TOOLCHAIN_ROOT}/bin/mig" ;;
+        migcom)             echo "${TOOLCHAIN_ROOT}/bin/migcom" ;;
+        libtool)            echo "${TOOLCHAIN_ROOT}/bin/libtool" ;;
+        strip)              echo "${TOOLCHAIN_ROOT}/bin/strip" ;;
+        nm)                 echo "${TOOLCHAIN_ROOT}/bin/nm" ;;
+        otool)              echo "${TOOLCHAIN_ROOT}/bin/otool" ;;
+        lipo)               echo "${TOOLCHAIN_ROOT}/bin/lipo" ;;
+        unifdef)            echo "${TOOLCHAIN_ROOT}/bin/unifdef" ;;
+        dsymutil)           echo "${TOOLCHAIN_ROOT}/bin/dsymutil" ;;
+        install_name_tool)  echo "${TOOLCHAIN_ROOT}/bin/install_name_tool" ;;
+        codesign)           echo "${TOOLCHAIN_ROOT}/bin/codesign" ;;
+        codesign_allocate)  echo "${TOOLCHAIN_ROOT}/bin/codesign_allocate" ;;
+        python3)            echo "/usr/bin/python3" ;;
+        git)                echo "/usr/bin/git" ;;
+        flex)               echo "/usr/bin/flex" ;;
+        bison)              echo "/usr/bin/bison" ;;
+        gm4|m4)             echo "/usr/bin/m4" ;;
+        ctfconvert|ctfmerge|ctf_insert|ctfdump)
+                            echo "${TOOLCHAIN_ROOT}/bin/ctf-noop" ;;
+        *)                  command -v "${name}" 2>/dev/null || true ;;
+    esac
+}
+
+mode=""
+tool=""
+sdk_arg=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -sdk|--sdk)       sdk_arg="$2"; shift 2 ;;
+        -show-sdk-path)   mode=path; shift ;;
+        -show-sdk-version) mode=version; shift ;;
+        -show-sdk-platform-path) mode=platform; shift ;;
+        -find)            tool="$2"; shift 2 ;;
+        -verbose)         shift ;;
+        --)               shift; break ;;
+        *)                shift ;;
+    esac
+done
+
+if [[ -n "${tool}" ]]; then
+    find_tool "${tool}"
+    exit 0
+fi
+
+case "${mode}" in
+    path)     echo "${SDK}" ;;
+    version)  echo "${SDK_VERSION}" ;;
+    platform) echo "${SDK}/MacOSX.platform" ;;
+    *)
+        echo "xcrun: unsupported invocation: $*" >&2
+        exit 2
+        ;;
+esac

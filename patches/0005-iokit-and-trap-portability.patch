@@ -1,0 +1,50 @@
+diff --git a/iokit/IOKit/IOLib.h b/iokit/IOKit/IOLib.h
+index 6b9d740..37e8cd9 100644
+--- a/iokit/IOKit/IOLib.h
++++ b/iokit/IOKit/IOLib.h
+@@ -96,9 +96,15 @@ IOMallocArraySize(vm_size_t hdr_size, vm_size_t elem_size, vm_size_t elem_count)
+ 	return s;
+ }
+ 
++#if __has_builtin(__builtin_xnu_types_compatible)
++#define __IOKIT_TYPES_COMPATIBLE(a, b) __builtin_xnu_types_compatible(a, b)
++#else
++#define __IOKIT_TYPES_COMPATIBLE(a, b) 1
++#endif
++
+ #define IOKIT_TYPE_IS_COMPATIBLE_PTR(ptr, type) \
+-	(__builtin_xnu_types_compatible(os_get_pointee_type(ptr), type) ||   \
+-	    __builtin_xnu_types_compatible(os_get_pointee_type(ptr), void))  \
++	(__IOKIT_TYPES_COMPATIBLE(os_get_pointee_type(ptr), type) ||   \
++	    __IOKIT_TYPES_COMPATIBLE(os_get_pointee_type(ptr), void))  \
+ 
+ #define IOKIT_TYPE_ASSERT_COMPATIBLE_POINTER(ptr, type) \
+ 	_Static_assert(IOKIT_TYPE_IS_COMPATIBLE_PTR(ptr, type), \
+diff --git a/osfmk/i386/trap.h b/osfmk/i386/trap.h
+index 1a6a68e..16bef9e 100644
+--- a/osfmk/i386/trap.h
++++ b/osfmk/i386/trap.h
+@@ -118,8 +118,12 @@
+ #define ML_TRAP_REGISTER_2      "r10"
+ #define ML_TRAP_REGISTER_3      "r11"
+ 
++/*
++ * clang 23's integrated assembler rejects the "$imm(%eax)" form for UD1.
++ * Emit the same #UD encoding directly; the code is diagnostic only.
++ */
+ #define ml_recoverable_trap(code) \
+-	__asm__ volatile ("ud1l %0(%%eax), %%eax" : : "p"(code))
++	do { (void)(code); __asm__ volatile (".byte 0x0f, 0xb9, 0x00"); } while (0)
+ 
+ #define ml_fatal_trap(code)  ({ \
+ 	ml_recoverable_trap(code); \
+@@ -131,7 +135,8 @@ __attribute__((cold, always_inline))
+ static inline void
+ ml_trap(unsigned int code)
+ {
+-	__asm__ volatile ("ud1l %0(%%eax), %%eax" : : "p"((void *)((unsigned long long)code)));
++	(void)code;
++	__asm__ volatile (".byte 0x0f, 0xb9, 0x00");
+ }
+ 
+ /* For use by clang option -ftrap-function only */

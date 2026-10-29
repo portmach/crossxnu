@@ -1,0 +1,27 @@
+diff --git a/libkern/libkern/c++/OSMetaClass.h b/libkern/libkern/c++/OSMetaClass.h
+index b3704c4..59e0aeb 100644
+--- a/libkern/libkern/c++/OSMetaClass.h
++++ b/libkern/libkern/c++/OSMetaClass.h
+@@ -1826,14 +1826,17 @@ public:
+ 
+ #define _OS_ADD_METAMETHODS(b) _OS_ADD_METAMETHODS_ ## b
+ #define _OS_ADD_METAMETHODS_
+-#define _OS_ADD_METAMETHODS_dispatch                            \
+-    virtual kern_return_t Dispatch(const IORPC rpc) APPLE_KEXT_OVERRIDE;
++/*
++ * IIG normally injects a per-class Dispatch override here.  The kernel can
++ * use OSMetaClassBase::Dispatch until DriverKit dispatch support is built;
++ * an override would add no vtable slot, only a symbol we cannot generate
++ * without IIG.
++ */
++#define _OS_ADD_METAMETHODS_dispatch
+ 
+ #define _OS_ADD_METHODS(className, b) _OS_ADD_METHODS_ ## b(className)
+ #define _OS_ADD_METHODS_(className)
+-#define _OS_ADD_METHODS_dispatch(className)                     \
+-    className ## _Methods                                       \
+-    className ## _KernelMethods
++#define _OS_ADD_METHODS_dispatch(className)
+ 
+ #define SUPERDISPATCH ((OSDispatchMethod)&super::_Dispatch)
+ 

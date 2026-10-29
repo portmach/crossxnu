@@ -1,0 +1,20 @@
+diff --git a/iokit/conf/Makefile.template b/iokit/conf/Makefile.template
+index 1a2bbeb..98dc908 100644
+--- a/iokit/conf/Makefile.template
++++ b/iokit/conf/Makefile.template
+@@ -28,11 +28,10 @@ CFLAGS_DEBUG += -DIOASSERT=1
+ #
+ # Directories for generated files
+ #
+-COMP_SUBDIRS = \
+-	DriverKit \
+-	Exclaves \
+-	Tests \
+-	Tests/TestServices
++# DriverKit/Exclaves need Apple's IIG generator; they are not part of the
++# macOS kernel proper.  crossxnu builds the kernel first and revisits them
++# when DriverKit support becomes a target.
++COMP_SUBDIRS =
+ 
+ #
+ #  Make sure we don't remove this by accident if interrupted at the wrong

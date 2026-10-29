@@ -1,0 +1,15 @@
+# Local experiments and build products
+.tmp/
+build/
+sdk/
+
+# Toolchain build artifacts
+toolchain/lib/*.o
+toolchain/lib/*.a
+
+# XNU build tree
+upstream/xnu/BUILD/
+
+# Editor / OS noise
+.DS_Store
+*.swp

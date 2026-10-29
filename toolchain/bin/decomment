@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# XNU's SETUP/decomment helper: drop comments, keep code.
+# For the cross build a plain copy is sufficient; comments in headers are
+# harmless.
+set -euo pipefail
+cat "$1"

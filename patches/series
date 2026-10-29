@@ -1,0 +1,8 @@
+# crossxnu patch series.  Applied in this order to upstream/xnu
+# (xnu-12377.121.6).  See docs/patches.md.
+0001-build-remove-darwin-host-probes.patch
+0002-exclude-driverkit-from-headers.patch
+0003-exclude-driverkit-from-kernel-build.patch
+0004-kalloc-type-builtins-fallback.patch
+0005-iokit-and-trap-portability.patch
+0006-osmetaclass-dispatch-injection.patch

@@ -1,0 +1,12 @@
+[submodule "upstream/xnu"]
+	path = upstream/xnu
+	url = https://github.com/apple-oss-distributions/xnu.git
+[submodule "upstream/bootstrap_cmds"]
+	path = upstream/bootstrap_cmds
+	url = https://github.com/apple-oss-distributions/bootstrap_cmds.git
+[submodule "upstream/AvailabilityVersions"]
+	path = upstream/AvailabilityVersions
+	url = https://github.com/apple-oss-distributions/AvailabilityVersions.git
+[submodule "upstream/libdispatch"]
+	path = upstream/libdispatch
+	url = https://github.com/apple-oss-distributions/libdispatch.git

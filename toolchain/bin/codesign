@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Kernel binaries are not code-signed in this build.  Accept and ignore.
+exit 0

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Target C++ compiler driver: clang++ for x86_64-apple-macos.
+set -euo pipefail
+
+REAL_CXX="${CROSSXNU_REAL_CLANGXX:-/usr/bin/clang++}"
+TARGET="${CROSSXNU_TARGET:-x86_64-apple-macos26.5}"
+
+args=()
+link=1
+skip=0
+for arg in "$@"; do
+    if [[ ${skip} -eq 1 ]]; then
+        skip=0
+        continue
+    fi
+    case "${arg}" in
+        -arch)              skip=1 ;;
+        -arch=*)            ;;
+        -target)            skip=1 ;;
+        -target=*)          ;;
+        -c|-E|-S|-M|-MM)    link=0; args+=("${arg}") ;;
+        *)                  args+=("${arg}") ;;
+    esac
+done
+
+if [[ ${link} -eq 1 ]]; then
+    args+=("-fuse-ld=lld")
+fi
+
+exec "${REAL_CXX}" -target "${TARGET}" "${args[@]}"

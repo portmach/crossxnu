@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Minimal unifdef replacement.
+#
+# Phase 1 does not need the full cpp-expression evaluator: kernel builds
+# define KERNEL/KERNEL_PRIVATE, so copying a header unchanged selects the
+# correct branches.  Exported-header polishing will replace this with a real
+# unifdef implementation.
+set -euo pipefail
+
+out=""
+input=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        -o*) out="${1#-o}"; shift ;;
+        -D|-U) shift 2 ;;
+        -D*|-U*|-t|-d|-c|-b|-k|-n|-s|-m) shift ;;
+        -) input="-"; shift ;;
+        -*) shift ;;
+        *) input="$1"; shift ;;
+    esac
+done
+
+if [[ -z "${input}" || "${input}" == "-" ]]; then
+    if [[ -n "${out}" ]]; then
+        cat > "${out}"
+    else
+        cat
+    fi
+else
+    if [[ -n "${out}" ]]; then
+        cat "${input}" > "${out}"
+    else
+        cat "${input}"
+    fi
+fi

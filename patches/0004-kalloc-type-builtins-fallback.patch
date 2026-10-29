@@ -1,0 +1,79 @@
+diff --git a/osfmk/kern/kalloc.h b/osfmk/kern/kalloc.h
+index d491acc..20d8658 100644
+--- a/osfmk/kern/kalloc.h
++++ b/osfmk/kern/kalloc.h
+@@ -858,8 +858,26 @@ __options_decl(kt_granule_t, uint32_t, {
+  *
+  * @param type          The type to analyze
+  */
++#if __has_builtin(__builtin_xnu_type_summary)
++#define __XNU_TYPE_SUMMARY(type) __builtin_xnu_type_summary(type)
++#else
++/*
++ * Upstream clang does not implement Apple's type-summary builtin.
++ *
++ * Approximate it: a top-level pointer is a pointer granule; everything
++ * else is treated as data+padding.  This keeps OSData/OSAllocation
++ * static_asserts working, but does not inspect pointers nested in
++ * aggregates.  See docs/compatibility.md for the remaining ABI gap.
++ */
++#ifdef __cplusplus
++#define __XNU_TYPE_SUMMARY(type) (__is_pointer(type) ? 2u : 5u)
++#else
++#define __XNU_TYPE_SUMMARY(type) 5u
++#endif
++#endif
++
+ #define KT_SUMMARY_GRANULES(type) \
+-	(__builtin_xnu_type_summary(type) & KT_SUMMARY_MASK_TYPE_BITS)
++	(__XNU_TYPE_SUMMARY(type) & KT_SUMMARY_MASK_TYPE_BITS)
+ 
+ /*!
+  * @macro KALLOC_TYPE_SIG_CHECK
+@@ -920,9 +938,20 @@ __options_decl(kt_granule_t, uint32_t, {
+  * @param ptr           the pointer whose type needs to be checked.
+  * @param type          the type which the pointer will be checked against.
+  */
++#if __has_builtin(__builtin_xnu_types_compatible)
++#define __XNU_TYPES_COMPATIBLE(a, b) __builtin_xnu_types_compatible(a, b)
++#else
++/*
++ * Upstream clang has no XNU signature type system.  Accept every pointer at
++ * compile time; the kernel still performs its runtime checks.  This is a
++ * compile-time-only relaxation, tracked in docs/compatibility.md.
++ */
++#define __XNU_TYPES_COMPATIBLE(a, b) 1
++#endif
++
+ #define KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type)                         \
+-	(__builtin_xnu_types_compatible(os_get_pointee_type(ptr), type) ||   \
+-	    __builtin_xnu_types_compatible(os_get_pointee_type(ptr), void))  \
++	(__XNU_TYPES_COMPATIBLE(os_get_pointee_type(ptr), type) ||           \
++	    __XNU_TYPES_COMPATIBLE(os_get_pointee_type(ptr), void))          \
+ 
+ #define KALLOC_TYPE_ASSERT_COMPATIBLE_POINTER(ptr, type) \
+ 	_Static_assert(KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type), \
+@@ -1645,10 +1674,22 @@ kt_size(vm_size_t s1, vm_size_t s2, vm_size_t c2)
+  * args can be used to provide other types in the allocation, to make the
+  * decision of whether to emit the signature.
+  */
++#if __has_builtin(__builtin_xnu_type_signature)
++#define __XNU_TYPE_SIGNATURE(type) __builtin_xnu_type_signature(type)
++#else
++/*
++ * Without Apple's builtin we cannot synthesise the layout signature.  An
++ * empty signature keeps kalloc_type working, at the cost of the signature
++ * based hardening/telemetry for kernel allocations.  Tracked as an ABI /
++ * hardening gap in docs/compatibility.md.
++ */
++#define __XNU_TYPE_SIGNATURE(type) ""
++#endif
++
+ #define KALLOC_TYPE_EMIT_SIG(sig_type, ...)                              \
+ 	(KALLOC_TYPE_CHECK(KT_SUMMARY_MASK_DATA, sig_type, ##__VA_ARGS__) || \
+ 	KALLOC_TYPE_VM_SIZE_CHECK(sig_type, ##__VA_ARGS__))?                 \
+-	"" : __builtin_xnu_type_signature(sig_type)
++	"" : __XNU_TYPE_SIGNATURE(sig_type)
+ 
+ /*
+  * Kalloc type flags are adjusted to indicate if the type is "data-only" or

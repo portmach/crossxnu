@@ -1,0 +1,9 @@
+* text=auto
+
+# Shell scripts must keep LF even on Windows checkouts: the WSL build
+# executes them directly and a CRLF shebang breaks with "No such file".
+*.sh            text eol=lf
+toolchain/bin/* text eol=lf
+patches/*.patch text eol=lf
+patches/series  text eol=lf
+*.md            text eol=lf
