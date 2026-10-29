@@ -77,13 +77,27 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
   (`_mh_execute_header` для bare kernel), но деление всё ещё
   воспроизводится — значит, проблема не только в boundary symbols.
 
-## Следующий шаг
+## Fileset-путь
 
-Проверить, почему `kalloc_type_view_parse()` для `KCFormatStatic` видит
-пустые `__kalloc_type`/`__kalloc_var` (секции в kernel есть, см.
-`otool -l`). Варианты:
+Собран `kc-tools` (PureDarwin, BSD-3-Clause) и `build/kernel.kc`:
 
-1. `__kalloc_type` section start/end symbols после cctools link;
-2. формат `kalloc_type_view` в non-LTO сборке;
-3. собрать полноценный `MH_FILESET` kernelcollection через `kc-tools`
-   вместо bare `MH_EXECUTE`.
+```bash
+./scripts/build-kc-tools.sh
+./scripts/build-fileset.sh
+```
+
+`kc-builder` делает `MH_FILESET` с флагом `MH_DYLIB_IN_CACHE`;
+загрузчик это уже понимает (`KC_hdrs_vaddr`). Проверка fileset в QEMU
+дала **ту же** панику `kalloc_type_distribute_budget()`: разбор
+верхнеуровневой `__kalloc_type` для fileset не даёт views. Патч 0015
+добавляет разбор top-level kernel-секции, но деление всё ещё
+воспроизводится.
+
+Следующий шаг — kext-entry для kernel, реальные kext’ы в KC или
+отладка `kalloc_type_view_copy()`.
+
+## Bare-путь (экспериментально)
+
+Bare `MH_EXECUTE` доходит до того же места; патчи 0013/0014/0015 —
+временные обходы, не ABI-путь. Не использовать как основу для
+полного userland.

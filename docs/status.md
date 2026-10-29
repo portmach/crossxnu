@@ -75,7 +75,7 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `kalloc_type_distribute_budget()` divide error | разобрать `__kalloc_type`/static KC или собрать `MH_FILESET` | **высокий** |
+| 1 | `kalloc_type_distribute_budget()` divide error (bare и fileset) | разобрать kalloc views / kext-entry / реальные kext’ы | **высокий** |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |

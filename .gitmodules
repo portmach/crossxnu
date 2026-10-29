@@ -16,3 +16,6 @@
 [submodule "upstream/cctools-port"]
 	path = upstream/cctools-port
 	url = https://github.com/tpoechtrager/cctools-port.git
+[submodule "upstream/kc-tools"]
+	path = upstream/kc-tools
+	url = https://github.com/PureDarwin/kc-tools.git
