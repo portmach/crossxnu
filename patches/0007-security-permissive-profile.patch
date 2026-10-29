@@ -1,0 +1,247 @@
+diff --git a/bsd/kern/kern_codesigning.c b/bsd/kern/kern_codesigning.c
+index 43a6b20..cd8487b 100644
+--- a/bsd/kern/kern_codesigning.c
++++ b/bsd/kern/kern_codesigning.c
+@@ -150,6 +150,20 @@ code_signing_configuration(
+ 	config |= CS_CONFIG_LOCAL_SIGNING;
+ 	config |= CS_CONFIG_OOP_JIT;
+ 
++#if CROSSXNU_SECURITY_PERMISSIVE
++	/*
++	 * crossxnu phase 1: keep the cs_* ABI, cs_blob parsing and
++	 * entitlements parser, but do not enforce signatures or entitlements.
++	 * This is a security policy, not an ABI change.
++	 */
++	config |= CS_CONFIG_ALLOW_ANY_SIGNATURE;
++	config |= CS_CONFIG_ENFORCEMENT_DISABLED;
++	config |= CS_CONFIG_GET_OUT_OF_MY_WAY;
++	config |= CS_CONFIG_INTEGRITY_SKIP;
++	config |= CS_CONFIG_UNRESTRICTED_DEBUGGING;
++	printf("crossxnu: permissive code-signing profile enabled\n");
++#endif
++
+ #if CODE_SIGNING_MONITOR
+ 	/* Mark the code signing monitor as enabled if required */
+ 	if (csm_enabled() == true) {
+diff --git a/bsd/kern/kern_cs.c b/bsd/kern/kern_cs.c
+index c1c3929..f17c18a 100644
+--- a/bsd/kern/kern_cs.c
++++ b/bsd/kern/kern_cs.c
+@@ -510,7 +510,7 @@ csblob_invalidate_flags(struct cs_blob *csblob)
+ 		csblob->csb_flags = updated_flags;
+ 	}
+ 
+-	if (csblob->csb_entitlements != NULL) {
++	if (csblob->csb_entitlements != NULL && amfi != NULL) {
+ 		amfi->OSEntitlements_invalidate(csblob->csb_entitlements);
+ 	}
+ 
+@@ -790,7 +790,11 @@ csblob_entitlements_dictionary_copy(struct cs_blob *csblob)
+ 		return NULL;
+ 	}
+ 	if (!amfi) {
++#if CROSSXNU_SECURITY_PERMISSIVE
++		return NULL;
++#else
+ 		panic("CoreEntitlements: missing AMFI bridge\n");
++#endif
+ 	}
+ 	return amfi->OSEntitlements_asdict(csblob->csb_entitlements);
+ }
+diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
+index 4b1e8a9..095f009 100644
+--- a/bsd/kern/kern_trustcache.c
++++ b/bsd/kern/kern_trustcache.c
+@@ -124,6 +124,10 @@ get_trust_cache_info(void)
+ void
+ trust_cache_runtime_init(void)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	printf("crossxnu: permissive trust-cache profile; runtime disabled\n");
++	return;
++#endif
+ 	/* Image4 interface needs to be available */
+ 	if (img4if == NULL) {
+ 		panic("image4 interface not available");
+@@ -383,6 +387,10 @@ is_internal_iBoot(void)
+ void
+ trust_cache_runtime_init(void)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	printf("crossxnu: permissive trust-cache profile; runtime disabled\n");
++	return;
++#endif
+ 	bool allow_second_static_cache = false;
+ 	bool allow_engineering_caches = false;
+ 
+@@ -563,6 +571,10 @@ SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust
+ void
+ trust_cache_runtime_init(void)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	printf("crossxnu: permissive trust-cache profile; runtime disabled\n");
++	return;
++#endif
+ 	bool allow_second_static_cache = false;
+ 	bool allow_engineering_caches = false;
+ 	bool allow_legacy_caches = false;
+@@ -808,6 +820,10 @@ check_trust_cache_runtime_for_uuid(
+ 	if (check_uuid == NULL) {
+ 		return KERN_INVALID_ARGUMENT;
+ 	}
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)check_uuid;
++	return KERN_SUCCESS;
++#endif
+ 
+ #if CONFIG_SPTM
+ 	ret = txm_check_trust_cache_runtime_for_uuid(check_uuid);
+@@ -823,6 +839,10 @@ check_trust_cache_runtime_for_uuid(
+ kern_return_t
+ unload_trust_cache(uuid_t uuid)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)uuid;
++	return KERN_SUCCESS;
++#endif
+ 	kern_return_t ret = KERN_DENIED;
+ 	uuid_string_t uuid_string = {0};
+ 
+@@ -863,6 +883,11 @@ load_trust_cache(
+ {
+ 	TCType_t type = kTCTypeInvalid;
+ 	kern_return_t ret = KERN_DENIED;
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)type;
++	(void)ret;
++	return KERN_SUCCESS;
++#endif
+ 
+ 	/* Start from the first valid type and attempt to validate through each */
+ 	for (type = kTCTypeLTRS; type < kTCTypeTotal; type += 1) {
+@@ -902,6 +927,16 @@ load_trust_cache_with_type(
+ 	size_t img4_payload_len = 0;
+ 	const uint8_t *img4_manifest = NULL;
+ 	size_t img4_manifest_len = 0;
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)type;
++	(void)img4_object;
++	(void)img4_object_len;
++	(void)img4_ext_manifest;
++	(void)img4_ext_manifest_len;
++	(void)img4_aux_manifest;
++	(void)img4_aux_manifest_len;
++	return KERN_SUCCESS;
++#endif
+ 
+ 	/* img4_object is required */
+ 	if (!img4_object || (img4_object_len == 0)) {
+@@ -1040,6 +1075,13 @@ load_legacy_trust_cache(
+ {
+ 	kern_return_t ret = KERN_DENIED;
+ 	uintptr_t length_check = 0;
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)ret;
++	(void)length_check;
++	(void)module_data;
++	(void)module_size;
++	return KERN_SUCCESS;
++#endif
+ 
+ 	/* Module is required */
+ 	if (!module_data || (module_size == 0)) {
+@@ -1078,6 +1120,13 @@ query_trust_cache(
+ 		printf("unable to query trust caches: no cdhash provided\n");
+ 		return KERN_INVALID_ARGUMENT;
+ 	}
++#if CROSSXNU_SECURITY_PERMISSIVE
++	(void)query_type;
++	if (query_token != NULL) {
++		memset(query_token, 0, sizeof(*query_token));
++	}
++	return KERN_SUCCESS;
++#endif
+ 
+ #if CONFIG_SPTM
+ 	ret = txm_query_trust_cache(query_type, cdhash, query_token);
+@@ -1166,6 +1215,10 @@ PHYSMAP_PTOV_check(void *paddr)
+ void
+ load_static_trust_cache(void)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	trust_cache_static_init = true;
++	return;
++#endif
+ 	DTEntry memory_map = {0};
+ 	const DTTrustCacheRange *tc_range = NULL;
+ 	trust_cache_offsets_t *tc_offsets = NULL;
+@@ -1313,6 +1366,9 @@ static_trust_cache_capabilities(
+ 	*num_static_trust_caches_ret = 0;
+ 	*capabilities0_ret = kTCCapabilityNone;
+ 	*capabilities1_ret = kTCCapabilityNone;
++#if CROSSXNU_SECURITY_PERMISSIVE
++	return KERN_SUCCESS;
++#endif
+ 
+ 	/* Ensure static trust caches have been initialized */
+ 	if (trust_cache_static_init == false) {
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 79bf0cb..ec2eb90 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -3955,7 +3955,9 @@ static void
+ cs_blob_cleanup(struct cs_blob *blob)
+ {
+ 	if (blob->csb_entitlements != NULL) {
+-		amfi->OSEntitlements_invalidate(blob->csb_entitlements);
++		if (amfi != NULL) {
++			amfi->OSEntitlements_invalidate(blob->csb_entitlements);
++		}
+ 		osobject_release(blob->csb_entitlements);
+ 		blob->csb_entitlements = NULL;
+ 	}
+@@ -4431,6 +4433,11 @@ static errno_t
+ accelerate_entitlement_queries(
+ 	struct cs_blob *cs_blob)
+ {
++#if CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return 0;
++	}
++#endif
+ 	kern_return_t ret = KERN_NOT_SUPPORTED;
+ 
+ #if CODE_SIGNING_MONITOR
+diff --git a/bsd/sys/code_signing.h b/bsd/sys/code_signing.h
+index 80740d9..97cf035 100644
+--- a/bsd/sys/code_signing.h
++++ b/bsd/sys/code_signing.h
+@@ -47,6 +47,14 @@ typedef uint32_t code_signing_config_t;
+ #define CS_CONFIG_RELAX_PROFILE_TRUST    (1 << 5)
+ #define CS_CONFIG_DEV_MODE_POLICY        (1 << 6)
+ 
++/*
++ * crossxnu phase-1 security profile.  The build system defines this to 1
++ * for permissive kernels; 0 keeps Apple's behaviour.
++ */
++#ifndef CROSSXNU_SECURITY_PERMISSIVE
++#define CROSSXNU_SECURITY_PERMISSIVE 0
++#endif
++
+ /* Config - Features */
+ #define CS_CONFIG_REM_SUPPORTED            (1 << 25)
+ #define CS_CONFIG_MAP_JIT                  (1 << 26)
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+index c977c98..56db0e1 100644
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -626,6 +626,9 @@ kernel_bootstrap(void)
+ 	kernel_bootstrap_log("code_signing_init");
+ 	code_signing_init();
+ 	code_signing_configuration(NULL, &cs_config);
++#if CROSSXNU_SECURITY_PERMISSIVE
++	AMFI_bootarg_disable_mach_hardening = true;
++#endif
+ #if XNU_TARGET_OS_OSX && (DEVELOPMENT || DEBUG)
+ 	if (cs_config & CS_CONFIG_GET_OUT_OF_MY_WAY) {
+ 		AMFI_bootarg_disable_mach_hardening = true;

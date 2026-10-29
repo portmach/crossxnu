@@ -6,3 +6,4 @@
 0004-kalloc-type-builtins-fallback.patch
 0005-iokit-and-trap-portability.patch
 0006-osmetaclass-dispatch-injection.patch
+0007-security-permissive-profile.patch

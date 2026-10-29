@@ -2,7 +2,7 @@
 
 Дополняет [`../SECURITY.md`](../SECURITY.md). Здесь — техническое
 обоснование permissive-режима и границы между TrustCache и
-CodeSignature.
+CodeSignature. Справочник по конкретным флагам — [`security-flags.md`](security-flags.md).
 
 ## 1. Две подсистемы, не одна
 

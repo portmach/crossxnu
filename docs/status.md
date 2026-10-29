@@ -22,6 +22,11 @@ security-модель macOS: подпись/доверие/entitlements не enf
 Пока ядро не линкуется и не грузится, permissive-режим — **заявленный
 профиль**, а не проверенная runtime-функция.
 
+Патч `0007-security-permissive-profile.patch` уже добавляет
+compile-time профиль `CROSSXNU_SECURITY_PERMISSIVE=1`:
+`--security permissive` в `scripts/build.sh`. Он не проверен в загрузке,
+но фиксирует политику в коде. Справочник флагов — [`security-flags.md`](security-flags.md).
+
 ## 2. Что уже проверено
 
 ### 2.1. Host-инструменты

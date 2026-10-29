@@ -151,7 +151,14 @@ Bootstrap **не** собирает ядро. Это отдельный шаг, 
 
 ```bash
 ./scripts/build.sh --arch x86_64 --config RELEASE --jobs "$(nproc)"
+# либо явно:
+./scripts/build.sh --arch x86_64 --config RELEASE --security permissive
 ```
+
+`--security permissive` (по умолчанию) включает `CROSSXNU_SECURITY_PERMISSIVE=1`
+и патч 0007: TrustCache/CodeSignature не enforced. `--security strict`
+пока не готов (нужны реальные Apple AMFI/trust caches). Справочник флагов:
+[`security-flags.md`](security-flags.md).
 
 Скрипт:
 

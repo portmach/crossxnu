@@ -46,7 +46,8 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0003 | `0003-exclude-driverkit-from-kernel-build.patch` | не собирать DriverKit/IIG в `iokit/conf` | нет (DriverKit не входит в ядро) |
 | 0004 | `0004-kalloc-type-builtins-fallback.patch` | fallback для `__builtin_xnu_type_summary/signature/types_compatible` | **да, hardening**: сигнатуры kalloc и compile-time проверки |
 | 0005 | `0005-iokit-and-trap-portability.patch` | fallback в `IOLib.h`; UD1-asm в `trap.h` | **минимальный**: trap-инструкция та же (#UD), проверки типов ослаблены |
-| 0006 | `0006-ometaclass-dispatch-injection.patch` | не инжектить IIG `Dispatch` в `OSMetaClass` | **средний**: DriverKit dispatch-методы отсутствуют; слот vtable сохранён |
+| 0006 | `0006-osmetaclass-dispatch-injection.patch` | не инжектить IIG `Dispatch` в `OSMetaClass` | **средний**: DriverKit dispatch-методы отсутствуют; слот vtable сохранён |
+| 0007 | `0007-security-permissive-profile.patch` | permissive TrustCache/CodeSignature под `CROSSXNU_SECURITY_PERMISSIVE` | **security**: проверки отключены, ABI сохранён |
 
 ## 4. Как добавить патч
 

@@ -11,29 +11,42 @@ CONFIG="RELEASE"
 JOBS="$(nproc)"
 TARGET="all"
 LOG=""
+SECURITY="permissive"
 
 usage() {
     cat <<EOF
 usage: $0 [--arch x86_64] [--config RELEASE|DEVELOPMENT|DEBUG]
+          [--security permissive|strict]
           [--jobs N] [--target all|install|...] [--log FILE]
 
 Environment:
   CROSSXNU_BUILD   build directory (default: <repo>/build)
   CROSSXNU_SDK     synthetic SDK  (default: <build>/sdk)
+
+Security:
+  permissive  (default) TrustCache/CodeSignature are not enforced
+  strict      leave Apple's enforcement in place (future; not ready)
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --arch)    ARCH="$2"; shift 2 ;;
-        --config)  CONFIG="$2"; shift 2 ;;
-        --jobs|-j) JOBS="$2"; shift 2 ;;
-        --target)  TARGET="$2"; shift 2 ;;
-        --log)     LOG="$2"; shift 2 ;;
-        -h|--help) usage; exit 0 ;;
+        --arch)     ARCH="$2"; shift 2 ;;
+        --config)   CONFIG="$2"; shift 2 ;;
+        --security) SECURITY="$2"; shift 2 ;;
+        --jobs|-j)  JOBS="$2"; shift 2 ;;
+        --target)   TARGET="$2"; shift 2 ;;
+        --log)      LOG="$2"; shift 2 ;;
+        -h|--help)  usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
     esac
 done
+
+case "${SECURITY}" in
+    permissive) SECURITY_PERMISSIVE=1 ;;
+    strict)     SECURITY_PERMISSIVE=0 ;;
+    *) echo "error: --security must be permissive or strict" >&2; exit 2 ;;
+esac
 
 case "${ARCH}" in
     x86_64|X86_64) ARCH_UC="X86_64" ;;
@@ -76,6 +89,7 @@ CFLAGS_EXTRA_VALUE+=" -Wno-void-pointer-to-int-cast"
 CFLAGS_EXTRA_VALUE+=" -Wno-pointer-to-int-cast"
 CFLAGS_EXTRA_VALUE+=" -DOS_FIREHOSE_SPI=1"
 CFLAGS_EXTRA_VALUE+=" -DOS_VOUCHER_ACTIVITY_SPI_TYPES=1"
+CFLAGS_EXTRA_VALUE+=" -DCROSSXNU_SECURITY_PERMISSIVE=${SECURITY_PERMISSIVE}"
 
 if [[ -z "${LOG}" ]]; then
     mkdir -p "${CROSSXNU_BUILD}/log"
@@ -83,7 +97,10 @@ if [[ -z "${LOG}" ]]; then
 fi
 
 echo "building XNU ${CROSSXNU_XNU_TAG} (${CONFIG_UC}, ${ARCH_UC})"
-echo "  SECURITY: permissive mode — TrustCache/CodeSignature are NOT enforced"
+echo "  SECURITY: ${SECURITY} (CROSSXNU_SECURITY_PERMISSIVE=${SECURITY_PERMISSIVE})"
+if [[ "${SECURITY}" == "permissive" ]]; then
+    echo "  TrustCache/CodeSignature are NOT enforced — see SECURITY.md"
+fi
 echo "  source: ${CROSSXNU_XNU}"
 echo "  SDK:    ${CROSSXNU_SDK}"
 echo "  log:    ${LOG}"
