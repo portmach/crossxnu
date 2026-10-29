@@ -1,5 +1,5 @@
 diff --git a/iokit/conf/files b/iokit/conf/files
-index c72c690..d7291d0 100644
+index c72c690..80ba531 100644
 --- a/iokit/conf/files
 +++ b/iokit/conf/files
 @@ -10,24 +10,6 @@ OPTIONS/mach_assert				optional mach_assert
@@ -27,3 +27,11 @@ index c72c690..d7291d0 100644
  
  # libIOKit
  
+@@ -111,7 +93,6 @@ iokit/Tests/TestServices/TestIODeviceMemoryRosetta.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIOUserClient2022Entitlements.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIOServiceUserNotification.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIODataQueues.cpp optional iokitcpp
+-./Tests/TestServices/TestDextRematch.iig.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestDextRematchKernel.cpp optional iokitcpp
+ 
+ iokit/Kernel/IOStatistics.cpp				optional iokitcpp

@@ -111,6 +111,7 @@ echo "  source: ${CROSSXNU_XNU}"
 echo "  SDK:    ${CROSSXNU_SDK}"
 echo "  log:    ${LOG}"
 
+set +e
 make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     XCRUN="${CROSSXNU_TOOLCHAIN}/bin/xcrun" \
     SDKROOT_RESOLVED="${CROSSXNU_SDK}" \
@@ -150,6 +151,12 @@ make -C "${CROSSXNU_XNU}" -j"${JOBS}" \
     RC_DARWIN_KERNEL_VERSION="${CROSSXNU_XNU_VERSION}" \
     CFLAGS_EXTRA="${CFLAGS_EXTRA_VALUE}" \
     "${TARGET}" 2>&1 | tee "${LOG}"
+BUILD_STATUS=${PIPESTATUS[0]}
+set -e
+if [[ ${BUILD_STATUS} -ne 0 ]]; then
+    echo "build failed (exit ${BUILD_STATUS}); see ${LOG}" >&2
+    exit "${BUILD_STATUS}"
+fi
 
 echo
 echo "build finished; kernel candidates:"
