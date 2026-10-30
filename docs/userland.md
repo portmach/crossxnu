@@ -78,15 +78,30 @@ RIP: 0x1047368de   RAX: 0x2000001     # 0x2000001 = exit(1)
 ## Следующий блокер: консоль
 
 Вывод userland'а не доходит до serial. Причина — `/dev/console` в x86-ветке
-XNU обслуживается драйвером `km` (`bsd/dev/i386/km.c`, `km_tty[0]`), который
-привязывается к клавиатуре/видео через IOKit. Наш platform-stub его не
-регистрирует, поэтому `cnopen`/`cnwrite` не работают: `cat` получает ошибку
-чтения, `echo` — ошибку записи. Ядро при этом пишет в serial напрямую
+XNU обслуживается драйвером `km` (`bsd/dev/i386/km.c`): `kminit()` вызывается
+из `bsd_init()` **всегда**, `km_tty[0]` существует, но за ним стоит
+VGA-фреймбуфер и PS/2-клавиатура. При `-display none` запись уходит в
+эмулируемый VGA, а не в serial; ядро при этом пишет в serial напрямую
 (`PE_kputc = pal_serial_putc`).
 
-Что нужно: зарегистрировать простой `consdev` поверх serial (putc → `serial_putc`,
-getc → `serial_getc`) в platform-stub'е, тогда `/dev/console` станет рабочим и
-даст интерактивный shell.
+Добавлен шим в `bsd/dev/i386/cons.c` (под `CROSSXNU_SECURITY_PERMISSIVE`):
+`cnopen`/`cnclose`/`cnread`/`cnwrite`/`cnioctl` при `crossxnu_serial_console()`
+работают напрямую с `serial_getc()`/`serial_putc()`, минуя km. Ядро с ним
+собирается, но вывод userland'а в serial пока не появился: `sh` завершается
+с кодом 1, не успев ничего напечатать. Дальше — проверить, доходит ли
+`cnwrite` вообще (fd 1/2 у pid 1 открывает сам ядро в `load_init_program`)
+и нет ли ошибки на `open("/dev/console")`.
+
+## Что изменено в ядре
+
+| Файл | Изменение |
+|:-----|:----------|
+| `bsd/pthread/pthread_shims.c` | `CROSSXNU_REQUIRE_PTHREAD_KEC()` в 16 syscall-шимах → `ENOTSUP` |
+| `iokit/bsddev/IOKitBSDInit.cpp` | `amfi == NULL` guards в 3 оставшихся entitlement-функциях |
+| `bsd/dev/i386/cons.c` | serial-бэкенд для `/dev/console` |
+
+Все три — в рабочем дереве `upstream/xnu`; в `patches/` пока не вынесены
+(как и HFS+-интеграция).
 
 ## Воспроизведение
 
@@ -94,6 +109,5 @@ getc → `serial_getc`) в platform-stub'е, тогда `/dev/console` стан�
 # recovery-root + патченный dyld
 python3 scripts/hfs-image.py ~/recovery ~/rec.hfs
 mcopy -o -i build/esp32.img ~/rec.hfs ::/ramdisk.img
-
-#boot-args на ESP: -v serial=1
+# boot-args на ESP: -v serial=1
 ```
