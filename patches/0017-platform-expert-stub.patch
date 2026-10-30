@@ -1,0 +1,45 @@
+diff --git a/iokit/Kernel/IOPlatformExpert.cpp b/iokit/Kernel/IOPlatformExpert.cpp
+index 76555f6..dfdc22f 100644
+--- a/iokit/Kernel/IOPlatformExpert.cpp
++++ b/iokit/Kernel/IOPlatformExpert.cpp
+@@ -2349,12 +2349,34 @@ public:
+ };
+ 
+ 
++
+ OSDefineMetaClassAndStructors(IOPanicPlatform, IOPlatformExpert);
+ 
+ 
+ bool
+ IOPanicPlatform::start(IOService * provider)
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/*
++	 * crossxnu: a kernel collection without AppleACPIPlatformExpert has no
++	 * driver for the synthetic "ACPI" platform.  Until a real platform
++	 * expert exists, let this built-in personality act as one so IOKit can
++	 * finish matching and boot can continue.  This is the permissive
++	 * bring-up profile, not a macOS-compatible platform implementation.
++	 */
++	const char * platform_name = provider ? provider->getName() : "ACPI";
++
++	if (!IOPlatformExpert::start(provider)) {
++		return false;
++	}
++
++	setProperty("crossxnu-platform-stub", true);
++	registerService();
++
++	IOLog("crossxnu: using built-in platform expert stub for \"%s\"\n",
++	    platform_name);
++	return true;
++#else
+ 	const char * platform_name = "(unknown platform name)";
+ 
+ 	if (provider) {
+@@ -2365,4 +2387,5 @@ IOPanicPlatform::start(IOService * provider)
+ 	    platform_name);
+ 
+ 	return false;
++#endif
+ }

@@ -7,7 +7,7 @@
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | сборка и линковка идут; ядро грузится в QEMU до IOKit/ACPI |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | ядро грузится в QEMU до BSD init со встроенным platform stub; блокер — commpage |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -74,14 +74,16 @@ build/mig/mig -cc toolchain/bin/clang \
       [`boot.md`](boot.md).
 - [x] `kc-builder` всегда генерирует `__PRELINK_INFO`, даже для KC без
       kext'ов (патч `patches/kc-tools/`).
-- [ ] Следующий блокер — нет platform expert kext'а (`ACPI`), см. §3.
+- [x] Встроенный platform-expert stub (0017), `pthread` KEC (0018) и
+      `ml_wait_max_cpus` (0019) обойдены; ядро доходит до BSD init.
+- [ ] Следующий блокер — запись в commpage до её инициализации, см. §3.
 - [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `Unable to find driver for this platform: "ACPI"` | подключить `AppleACPIPlatformExpert`/`IOACPIFamily` или собрать stub platform expert | **высокий**: без него нет root device и CPU enumeration |
+| 1 | `commpage_update_mach_approximate_time` пишет по невалидному `commPagePtr32` до `commpage_init` | не будить потоки/не обновлять commpage до инициализации commpage; либо порядок инициализации | **высокий** |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
@@ -126,3 +128,5 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-29 | UEFI xnu-loader: kernel стартует в QEMU (Skylake-Client); исправлены TSC/SSE/bare-KC; дальше divide в `kalloc_type_distribute_budget` |
 | 2026-10-30 | kalloc проходит; `__PRELINK_INFO` генерируется всегда; `read_random` и `vm_map_store` получили fallback без corecrypto KEC |
 | 2026-10-30 | Ядро доходит до `IOPlatformExpert`; panic: `Unable to find driver for this platform: "ACPI"` — нужен platform expert kext |
+| 2026-10-30 | Встроенный platform-expert stub: IOKit стартует; дальше `pthread` KEC и `ml_wait_max_cpus`; ядро доходит до BSD init |
+| 2026-10-30 | Новый блокер: `commpage_update_mach_approximate_time` пишет по невалидному commpage до `commpage_init` |

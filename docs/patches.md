@@ -55,6 +55,9 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0014 | `0014-kalloc-static-section-bounds.patch` | границы `__kalloc_type`-секций через Mach-O headers; fileset top-level; zero-zone guards | **да, kalloc**: без type-зон бюджет не распределяется |
 | 0015 | `0015-read-random-early-fallback.patch` | `read_random` использует early DRBG, пока corecrypto KEC не загружен | нет (только путь без KEC) |
 | 0016 | `0016-vm-map-store-no-corecrypto.patch` | не инициализировать per-CPU kmem RNG без `g_crypto_funcs`; fallback на `kmem_get_random16` | нет (только путь без corecrypto KEC) |
+| 0017 | `0017-platform-expert-stub.patch` | под `CROSSXNU_SECURITY_PERMISSIVE` `IOPanicPlatform` работает как встроенный platform expert (без ACPI) | **security/boot**: заглушка платформы, не macOS-совместимая |
+| 0018 | `0018-pthread-kec-optional.patch` | `pthread_init` не паникует без `com.apple.kec.pthread` | нет (только путь без KEC) |
+| 0019 | `0019-wait-max-cpus-stub.patch` | `ml_wait_max_cpus` не ждёт ACPI-перечисления CPU под permissive stub | нет (только путь без ACPI) |
 
 ### Патчи kc-tools
 

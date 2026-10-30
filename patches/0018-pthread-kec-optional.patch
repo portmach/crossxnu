@@ -1,0 +1,26 @@
+diff --git a/bsd/pthread/pthread_shims.c b/bsd/pthread/pthread_shims.c
+index e5e58b5..49fb60b 100644
+--- a/bsd/pthread/pthread_shims.c
++++ b/bsd/pthread/pthread_shims.c
+@@ -315,9 +315,21 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
+ void
+ pthread_init(void)
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/*
++	 * crossxnu: com.apple.kec.pthread is a kernel external component and is
++	 * absent from a synthetic kernel collection.  Boot can continue without
++	 * it; pthread syscalls will fail once userland actually uses them.
++	 */
++	if (!pthread_functions) {
++		printf("crossxnu: pthread KEC not loaded; skipping pthread_init\n");
++		return;
++	}
++#else
+ 	if (!pthread_functions) {
+ 		panic("pthread kernel extension not loaded (function table is NULL).");
+ 	}
++#endif
+ 	pthread_functions->pthread_init();
+ }
+ 

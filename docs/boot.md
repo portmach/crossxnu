@@ -1,8 +1,9 @@
 # Boot в QEMU (phase 1)
 
-**Статус:** ядро линкуется, грузится в QEMU и проходит kalloc, kext scan,
-PRNG и `vm_map_store`. Сейчас оно падает в `IOPlatformExpert`: нет
-platform expert kext'а для ACPI. Полной загрузки нет.
+**Статус:** ядро линкуется, грузится в QEMU, проходит kalloc, kext scan,
+PRNG, `vm_map_store`, IOKit и доходит до BSD init со встроенным
+platform-expert stub. Сейчас падает на обновлении commpage до её
+инициализации. Полной загрузки нет.
 
 ## Схема
 
@@ -118,8 +119,24 @@ kext'ов в KC есть `__PRELINK_INFO` с пустым
 `WARNING: did not find UUID in Primary KC!` — ожидаемо: synthetic KC
 пока без `_PrelinkKernel`/KernelCache UUID.
 
-Следующий шаг — platform expert kext (ACPI): без него `IOPlatformExpert`
-не находит драйвер платформы и не строит root device.
+### Встроенный platform expert stub
+
+Патч 0017 (`CROSSXNU_SECURITY_PERMISSIVE`) заставляет встроенный
+`IOPanicPlatform` работать как platform expert: он вызывает
+`IOPlatformExpert::start()`, публикует сервис и не паникует. Это
+заглушка для bring-up, не macOS-совместимый ACPI-драйвер.
+
+После неё выяснилось, что без kext'ов не хватает ещё двух вещей:
+
+- `com.apple.kec.pthread` — патч 0018 разрешает `pthread_init()` без
+  таблицы функций (pthread-сисколлы при этом не работают);
+- ACPI-перечисления CPU — патч 0019 заставляет `ml_wait_max_cpus()`
+  объявить boot CPU вместо бесконечного ожидания.
+
+Теперь ядро доходит до BSD init. Следующий блокер —
+`commpage_update_mach_approximate_time()`: планировщик обновляет
+commpage раньше, чем она инициализирована, и `commPagePtr32` указывает
+в невалидную страницу.
 
 ### Kext'ы в fileset
 
