@@ -41,3 +41,20 @@ XNU, Darwin, macOS, IOKit, DriverKit — товарные знаки Apple Inc.
 Загрузка ядра на реальном железе Apple может нарушать условия
 лицензии macOS; ответственность за это несёт пользователь. QEMU и
 собственное железо — безопасная песочница для разработки.
+
+## 3. Что генерируется, а не хранится
+
+* `upstream/xnu/bsd/hfs` — **не** коммитится. Дерево собирается скриптом
+  `scripts/sync-hfs.sh` из сабмодуля `upstream/hfs` (`core/` +
+  `hfs_encodings/hfs_encodinghint.c`) плюс наши собственные файлы
+  (`patches/hfs/extra/*`) и патч `patches/hfs/0001-build-against-xnu.patch`.
+  Приватный заголовок `AppleKeyStore/AppleKeyStoreFSServices.h` объявлен
+  шимом в `toolchain/shims/permissive/AppleKeyStore/`.
+* `upstream/xnu-loader` — сабмодуль `PureDarwin/xnu-loader`; наши правки
+  лежат в `patches/xnu-loader/` и применяются отдельно от XNU.
+* Всё, что нужно для *загрузки* (recovery-образ, `dyld`, `libsystem_*`,
+  `launchd`), пользователь берёт из своей macOS-инсталляции и держит вне
+  репозитория.
+
+Проверка перед публикацией: `scripts/check-publish.sh` (падает, если в
+индексе появились Mach-O, образы дисков или файлы больше 256 КиБ).

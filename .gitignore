@@ -20,4 +20,21 @@ upstream/xnu/iokit/Tests/TestServices/TestDextRematch.iig.cpp
 
 # Python bytecode
 __pycache__/
-upstream/xnu-loader/
+
+# Loader and kernel build products (the sources are submodule content and
+# patches, never binaries).
+upstream/xnu-loader/build/
+upstream/xnu-loader/.cache/
+
+# Anything extracted from macOS stays outside the repository, but guard against
+# accidentally committing it from a checkout that uses in-tree paths.
+*.dylib
+*.kext/
+*.kernelcache
+kernelcache*
+*.ipsw
+*.dmg
+*.hfs
+*.iso
+*.img
+*.fd

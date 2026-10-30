@@ -1,0 +1,123 @@
+diff --git a/include/common.h b/include/common.h
+index 8169255..96d2cf2 100644
+--- a/include/common.h
++++ b/include/common.h
+@@ -25,7 +25,7 @@
+ extern EFI_PHYSICAL_ADDRESS g_xnu_bootinfo_base;
+ #define XNU_BOOTINFO_BASE       g_xnu_bootinfo_base
+ #else
+-#define XNU_BOOTINFO_BASE       0x2800000ULL   /* 2MB-aligned, above KC image  */
++#define XNU_BOOTINFO_BASE       0x2800000ULL
+ #endif
+ /* XNU maps [physBase, topOfKernelData) as a unit and its arm64 pmap uses a
+  * 16KB granule, so both boundaries must be 16KB-aligned.  physBase already is;
+diff --git a/src/devtree.c b/src/devtree.c
+index b6dd77a..3214f9b 100644
+--- a/src/devtree.c
++++ b/src/devtree.c
+@@ -1116,18 +1116,18 @@ EFI_STATUS dt_build(
+   }
+ #endif
+ 
+-  //if (ctx->ramdisk_size != 0) {
+-  //  if (memory_map == NULL) {
+-  //    memory_map = dt_create_node(ctx);
+-  //    dt_prop_str(ctx, memory_map, "name", "memory-map");
+-  //  }
+-  //  MemoryMapFileInfo ramdisk_info;
+-  //  ramdisk_info.paddr = (UINT64)ctx->ramdisk_phys;
+-  //  ramdisk_info.length = ctx->ramdisk_size;
+-  //  dt_prop(ctx, memory_map, "RAMDisk", &ramdisk_info, sizeof(ramdisk_info));
+-  //  log_info(L"DT: RAMDisk at 0x%lx size=0x%lx\r\n",
+-  //           (UINT64)ctx->ramdisk_phys, ctx->ramdisk_size);
+-  //}
++  if (ctx->ramdisk_size != 0) {
++    if (memory_map == NULL) {
++      memory_map = dt_create_node(ctx);
++      dt_prop_str(ctx, memory_map, "name", "memory-map");
++    }
++    MemoryMapFileInfo ramdisk_info;
++    ramdisk_info.paddr = (UINT64)ctx->ramdisk_phys;
++    ramdisk_info.length = ctx->ramdisk_size;
++    dt_prop(ctx, memory_map, "RAMDisk", &ramdisk_info, sizeof(ramdisk_info));
++    log_info(L"DT: RAMDisk at 0x%lx size=0x%lx\r\n",
++             (UINT64)ctx->ramdisk_phys, ctx->ramdisk_size);
++  }
+ 
+   if (memory_map != NULL)
+     dt_add_child(ctx, chosen, memory_map);
+diff --git a/src/main.c b/src/main.c
+index 308ef16..9d013b6 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -235,6 +235,7 @@ EFI_STATUS AllocKernelMemRegion(AppContext *ctx, UINT64 span_bytes, UINT64 virt_
+ 
+ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+   AppContext ctx;
++  SetMem(&ctx, 0, sizeof(ctx));
+   FileBuffer kernel = {0};
+   MachoImage image_info;
+   MachoLoadResult load_result = {0};
+@@ -316,17 +317,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+ 
+   }
+ 
+-#if !defined(__aarch64__)
+-  /* x86: the boot-info block lives at a fixed low address (0x2800000);
+-   * reserve it before the staging allocation can land on it. On arm64 the
+-   * block is carved out of the staging region itself, after it exists. */
+-  status = ReserveBootInfoGuard(&ctx, &bootinfo_guard_base, &bootinfo_guard_pages);
+-  if (EFI_ERROR(status)) {
+-    file_free(&ctx, &kernel);
+-    return status;
+-  }
+-#endif
+-
+   /* Allocate a high staging buffer for the kernel image. */
+   {
+     UINT64 lo2 = 0, hi2 = 0;
+@@ -341,6 +331,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+   /* phys_base = staging address; post-EBS copy moves it to 0x100000 */
+   ctx.phys_base = ctx.kernel_region_base;
+ 
++#if !defined(__aarch64__)
++  status = ReserveBootInfoGuard(&ctx, &bootinfo_guard_base, &bootinfo_guard_pages);
++  if (EFI_ERROR(status)) {
++    file_free(&ctx, &kernel);
++    return status;
++  }
++#endif
++
+ #if defined(__aarch64__)
+   if (ctx.kernel_region_base < XNU_BOOTINFO_ALIGN) {
+     log_error(L"trustcache: kernel staging address is too low\r\n");
+@@ -440,7 +438,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+ 
+   log_info(L"entry vm=0x%lx -> host=0x%lx\r\n", entry_vmaddr, (UINT64)(UINTN)host_entry);
+ 
+-  //status = load_ramdisk(&ctx);
++  status = load_ramdisk(&ctx);
+   //if (EFI_ERROR(status))
+   //  return status;
+ 
+@@ -495,13 +493,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+   }
+ 
+   // disabled until things work right
+-  //if (ctx.ramdisk_size != 0) {
+-  //  status = append_ramdisk_boot_arg(&ctx, &cmdline, &cmdline_owned);
+-  //  if (EFI_ERROR(status)) {
+-  //    log_error(L"failed to append rd=md0: %r\r\n", status);
+-  //    return status;
+-  //  }
+-  //}
++  if (ctx.ramdisk_size != 0) {
++    status = append_ramdisk_boot_arg(&ctx, &cmdline, &cmdline_owned);
++    if (EFI_ERROR(status)) {
++      log_error(L"failed to append rd=md0: %r\r\n", status);
++      return status;
++    }
++  }
+ 
+   status = boot_build_args(&ctx, cmdline, &load_result, &boot_state);
+   if (EFI_ERROR(status)) {

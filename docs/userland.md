@@ -681,3 +681,42 @@ panic: initproc exited -- ... launchd.real cannot be run directly
 ядро подкладывает программе pid 1 (либо проверка имени файла `launchd`).
 Следующий шаг — найти эту проверку в launchd (по строке `cannot be run
 directly`) и дать ядру то, что она ожидает.
+### launchd как pid 1 и ABI workqueue-потока
+
+`launchd` отказывался стартовать не из-за `getpid()`: первой инструкцией его
+`main()` (`LC_MAIN entryoff 0x16598`) стоит `isatty(STDOUT_FILENO)`. Ядро на
+настоящем железе подаёт pid 1 без fd, поэтому `isatty(1)` возвращает `EBADF`;
+наш init отдавал `/dev/console`. `rc.launchd` теперь делает
+`exec /sbin/launchd.real </dev/null >/dev/null` (stderr остаётся на консоли,
+чтобы видеть раннюю диагностику) — после этого launchd стартует как pid 1.
+
+Дальше вскрылся ABI workqueue-потока. По исходникам libpthread
+(`_pthread_wqthread`) это:
+
+```text
+_start_wqthread:  rsp = self (= stackaddr); push %rbp; call _pthread_wqthread
+_pthread_wqthread(self, kport, stacklowaddr, keventlist, flags, nkevents)
+                 rdi   rsi    rdx            rcx         r8d    r9d
+```
+
+`_pthread_wqthread_setup()` считает `stacksize = self - stacklowaddr` и
+`_pthread_struct_init(self, ..., stackaddr = self, ...)`, а `PTHREAD_ALLOCADDR`
+вычитает ещё страницу — значит раскладка стека такая:
+
+```text
+base                       vm_allocate()
+base + page                stacklowaddr   (страница-«страж» ниже)
+...
+stackaddr = self           верх стека; здесь же лежит struct pthread
+stackaddr + pthsize        конец маппинга
+```
+
+`r8` обязан содержать `WQ_FLAG_THREAD_TSD_BASE_SET` (0x200000), иначе libpthread
+делает `PTHREAD_INTERNAL_CRASH`. `r9 = -1` (`WORKQ_EXIT_THREAD_NKEVENT`) — путь
+немедленного завершения потока.
+
+Осталось: протокол `kevent_workq_internal(KEVENT_FLAG_STACK_DATA | IMMEDIATE
+[| PARKING])`, которым kext кладёт на стек `[data][data avail][nevents]` и kqid
+перед `eventlist`, а также доставляет события обратно в kqworkloop. Пока
+`workq_handle_stack_events` только снимает привязку и паркует поток — workloop
+крутится вхолостую.

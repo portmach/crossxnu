@@ -17,5 +17,26 @@ mount -t hfs /dev/md1 /private/var || echo "crossxnu: mount of /dev/md1 failed"
 mkdir -p /private/var/run /private/var/db /private/var/log /private/var/tmp
 mkdir -p /private/var/root /private/var/empty
 
+# launchd switches from the console to its own log file once logging is
+# initialized ("launchd logging initialized"); without these directories the
+# open() fails with ENOENT and everything after that point is invisible.
+# launchd.log is a symlink to the console so the early-boot log stays visible on
+# the serial line (on a RAM volume the real file would be lost on reset anyway).
+mkdir -p /private/var/log/com.apple.xpc.launchd
+ln -sf /dev/console /private/var/log/com.apple.xpc.launchd/launchd.log
+mkdir -p /private/var/db/com.apple.xpc.launchd
+mkdir -p /private/var/run/com.apple.xpc.launchd
+mkdir -p /private/var/boot
+
+# launchd refuses to start if stdout is a terminal.  Its own main() opens
+# /dev/null on fds 0/1/2, but only *after* the guard, and the guard is:
+#
+#     if (isatty(STDOUT_FILENO))  -> "cannot be run directly"
+#     if (getpid() != 1)          -> "cannot be run directly"
+#
+# On real hardware the kernel starts pid 1 with no file descriptors at all,
+# so isatty(1) fails with EBADF.  We are not the kernel, so we have to give
+# launchd the same environment: /dev/null instead of the console tty.
+# stderr stays on the console so that launchd's early diagnostics are visible.
 echo "crossxnu: starting launchd as pid 1"
-exec /sbin/launchd.real
+exec /sbin/launchd.real </dev/null >/dev/null

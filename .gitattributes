@@ -5,5 +5,8 @@
 *.sh            text eol=lf
 toolchain/bin/* text eol=lf
 patches/*.patch text eol=lf
+patches/**/*.patch text eol=lf
+.gitmodules     text eol=lf
+userland/rc.*   text eol=lf
 patches/series  text eol=lf
 *.md            text eol=lf

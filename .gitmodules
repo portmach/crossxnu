@@ -23,3 +23,6 @@
 [submodule "upstream/hfs"]
 	path = upstream/hfs
 	url = https://github.com/apple-oss-distributions/hfs.git
+[submodule "upstream/xnu-loader"]
+	path = upstream/xnu-loader
+	url = https://github.com/PureDarwin/xnu-loader.git

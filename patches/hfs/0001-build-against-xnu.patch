@@ -1,0 +1,127 @@
+--- a/bsd/hfs/hfs.h
++++ b/bsd/hfs/hfs.h
+@@ -29,6 +29,8 @@
+ #ifndef __HFS__
+ #define __HFS__
+ 
++#include "kext-config.h"
++
+ /* If set to 1, enables the code to allocate blocks from the start 
+  * of the disk instead of the nextAllocation for sparse devices like 
+  * sparse disk images or sparsebundle images.  The free extent cache 
+--- a/bsd/hfs/hfs_catalog.c
++++ b/bsd/hfs/hfs_catalog.c
+@@ -1625,7 +1625,14 @@
+ 			dir->textEncoding = descp->cd_encoding;
+ 		}
+ 		dir->folderCount      = attrp->ca_dircount;
+-		bcopy(&attrp->ca_finderinfo[0], &dir->userInfo, 32);
++		/*
++		 * crossxnu: the on-disk 32 bytes of Finder information are split
++		 * into userInfo (16 bytes) and finderInfo (16 bytes).  The copy
++		 * intentionally spans both fields, so it must be checked against
++		 * the enclosing catalog record and not against the single
++		 * userInfo member (see osfmk/string.h, _FORTIFY_SOURCE_STRICT).
++		 */
++		__nochk_bcopy(&attrp->ca_finderinfo[0], &dir->userInfo, 32);
+ 		/*
+ 		 * Update the BSD Info if it was already initialized on
+ 		 * disk or if the runtime values have been modified.
+@@ -1692,7 +1699,8 @@
+ 		} else {
+ 			file->textEncoding = descp->cd_encoding;
+ 		}
+-		bcopy(&attrp->ca_finderinfo[0], &file->userInfo, 32);
++		/* crossxnu: spans userInfo+finderInfo, see catrec_update above. */
++		__nochk_bcopy(&attrp->ca_finderinfo[0], &file->userInfo, 32);
+ 		/*
+ 		 * Update the BSD Info if it was already initialized on
+ 		 * disk or if the runtime values have been modified.
+@@ -3738,7 +3746,13 @@
+ 		crp->hfsPlusFolder.backupDate = 0;
+ 		crp->hfsPlusFolder.textEncoding = encoding;
+ 		crp->hfsPlusFolder.folderCount = 0;
+-		bcopy(attrp->ca_finderinfo, &crp->hfsPlusFolder.userInfo, 32);
++		/*
++		 * crossxnu: the 32 bytes of Finder information live in the
++		 * userInfo+finderInfo pair of 16-byte fields; check the copy
++		 * against the record, not against one field
++		 * (see osfmk/string.h, _FORTIFY_SOURCE_STRICT).
++		 */
++		__nochk_bcopy(attrp->ca_finderinfo, &crp->hfsPlusFolder.userInfo, 32);
+ 		bsdp = &crp->hfsPlusFolder.bsdInfo;
+ 		bsdp->special.linkCount = 1;
+ 		*recordSize = sizeof(HFSPlusCatalogFolder);
+@@ -3754,7 +3768,8 @@
+ 		crp->hfsPlusFile.backupDate = 0;
+ 		crp->hfsPlusFile.textEncoding = encoding;
+ 		crp->hfsPlusFile.reserved2 = 0;
+-		bcopy(attrp->ca_finderinfo, &crp->hfsPlusFile.userInfo, 32);
++		/* crossxnu: spans userInfo+finderInfo, see buildrecord above. */
++		__nochk_bcopy(attrp->ca_finderinfo, &crp->hfsPlusFile.userInfo, 32);
+ 		bsdp = &crp->hfsPlusFile.bsdInfo;
+ 		/* BLK/CHR need to save the device info */
+ 		if (type == S_IFBLK || type == S_IFCHR) {
+--- a/bsd/hfs/hfs_cprotect.h
++++ b/bsd/hfs/hfs_cprotect.h
+@@ -387,6 +387,10 @@
+ 
+ errno_t cp_handle_strategy(buf_t bp);
+ 
++#ifndef CP_ROOT_CRYPTOG1
++#define CP_ROOT_CRYPTOG1 0x1
++#endif
++
+ typedef enum {
+ 	CP_READ_ACCESS	= 0x1,
+ 	CP_WRITE_ACCESS = 0x2
+--- a/bsd/hfs/hfs_readwrite.c
++++ b/bsd/hfs/hfs_readwrite.c
+@@ -75,6 +75,7 @@
+ #include	"FileMgrInternal.h"
+ #include	"BTreesInternal.h"
+ #include	"hfs_cnode.h"
++#include	"hfs_cprotect.h"
+ #include	"hfs_dbg.h"
+ 
+ #if HFS_CONFIG_KEY_ROLL
+--- a/bsd/hfs/hfs_search.c
++++ b/bsd/hfs/hfs_search.c
+@@ -42,6 +42,7 @@
+ #include <sys/conf.h>
+ #include <mach/machine/vm_types.h>
+ #include <sys/vnode.h>
++#include <sys/vnode_internal.h>
+ #include <sys/malloc.h>
+ #include <sys/signalvar.h>
+ #include <sys/attr.h>
+--- a/bsd/hfs/kext-config.h
++++ b/bsd/hfs/kext-config.h
+@@ -29,7 +29,7 @@
+ #ifndef _hfs_config_
+ #define _hfs_config_
+ 
+-#include <TargetConditionals.h>
++#include "TargetConditionals.h"
+ 
+ #define HFS_COMPRESSION 1
+ #define FIFO 1
+@@ -49,6 +49,7 @@
+ #define NAMEDSTREAMS 1
+ #define CONFIG_HFS_DIRLINK 1
+ #define CONFIG_SEARCHFS 1
++#define CONFIG_PROTECT 1
+ 
+ #endif
+ 
+--- a/bsd/hfs/hfs_encodinghint.c
++++ b/bsd/hfs/hfs_encodinghint.c
+@@ -27,7 +27,7 @@
+  */
+ 
+ #include <sys/param.h>
+-#include "../core/hfs.h"
++#include "hfs.h"
+ 
+ 
+ /* CJK Mac Encoding Bits */
