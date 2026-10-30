@@ -560,3 +560,18 @@ sh-3.2# /sbin/launchd.real; echo rc=$?
 
 `launchd` по-прежнему упирается в `Root queue initialization failed`
 (libdispatch), но обычный `pthread_create()` теперь работает.
+#### Атрибуты `bsdthread_create` (что передаёт libpthread)
+
+Все вызовы приходят с `flags = 0x90008ff`, `threadstart = _thread_start`,
+`wqthread = _start_wqthread` (`threadstart - 0x14`):
+
+```text
+crossxnu: bsdthread_create: suspended port=7939 flags=0x90008ff
+    threadstart=0x1074cc820 wqthread=0x1074cc80c stack=0x117c4a000
+```
+
+То есть «это workqueue-поток» кодируется не отдельным битом в `flags` —
+решение о точке входа (`p_threadstart` против `p_wqthread`) нужно принимать по
+битам workqueue-атрибутов внутри `flags` либо по `uthread->uu_workq_flags`.
+Пара `threadstart`/`wqthread` теперь видна в логе на каждом создании потока,
+что и нужно для следующего шага — запускать workqueue-потоки с `p_wqthread`.
