@@ -340,3 +340,45 @@ clang-заглушка `__builtin_trap`. Рабочие версии:
 
 Следующий шаг — печатать в ядре для user-mode `#UD` путь образа и 8 байт по
 `RIP` (в `osfmk/i386/trap.c`), чтобы ответить на эти вопросы одним запуском.
+
+### SIGILL в launchd: `BUG IN LIBPTHREAD`
+
+Чтобы не гадать по голому `RIP`, в `osfmk/i386/trap.c` добавлен отчёт для
+user-mode `#UD`: под `CROSSXNU_SECURITY_PERMISSIVE` `user_trap()` печатает
+`RIP`, смещение в странице и 16 байт инструкции (через `copyin`):
+
+```text
+crossxnu: user #UD rip=0x1050d004f page_off=0x4f insn=67 0f b9 80 01 b0 ff ff 0f 0b 55 48 89 e5 48 8d
+```
+
+Байты — это `ud1` + `ud2` (clang-заглушка), а не «левая» инструкция. Поиск
+этих байтов по дереву recovery-образа даёт единственное совпадение:
+
+```text
+offset=0x904f  page_off=0x4f  usr/lib/system/libsystem_pthread.dylib
+```
+
+Это `__pthread_workqueue_supported.cold.1` — холодный блок, который перед
+ловушкой пишет строку в `__crashreporter_info__`:
+
+```text
+9037/904f: ud1l -0x4fff(%eax), %eax ; ud2
+0x9b06:   "BUG IN LIBPTHREAD: libpthread has not been initialized"
+```
+
+То есть падение — не порча кода и не отсутствующая инструкция CPU, а
+сознательный `trap` в libpthread: **`__pthread_init()` не вызывался**. Его
+вызывает kext `com.apple.kec.pthread` через таблицу `pthread_functions`
+(`bsd/sys/pthread_shims.h`): `pthread_init()` в
+`bsd/pthread/pthread_shims.c` сейчас под permissive просто печатает
+`pthread KEC not loaded; skipping pthread_init` и возвращается.
+
+Что нужно, чтобы это закрыть: собрать таблицу `pthread_functions` внутри ядра
+вместо kext'а. В таблице ~25 живых слотов (остальные — `__unused_was_*`):
+`pthread_init`, `pth_proc_hashinit/delete`,
+`bsdthread_create/register/register2/terminate`, `thread_selfid`,
+11 `psynch_*`, `pthread_find_owner`, `pthread_get_thread_kwq` и 5 `workq_*`.
+Часть инфраструктуры уже есть в `pthread_shims.c` (аксессоры
+`proc_get_threadstart`, `pthread_callbacks`, waitq/turnstile-код), но
+`bsdthread_create` и `psynch_*` — это и есть тело закрытого kext'а, поэтому
+это отдельная задача, а не односимвольная правка.
