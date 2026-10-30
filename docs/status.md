@@ -322,3 +322,29 @@ syscall'ов, то есть последовательность останав�
 и/или прочитать из сторожевого таймера `__dispatch_main_q` (`dq_state`,
 `dq_items_tail`) через `copyin`, найдя базу libdispatch в адресном
 пространстве launchd.
+
+### Death-путь workqueue: поток на idlelist, но TH_RUN (2026-10-30)
+
+Гипотеза «ядро убивает поток, который уже разбужен для работы» проверена
+диагностикой в `workq_unpark_for_death_and_unlock()` (печать состояния
+машино-потока, списка, в котором лежит uthread, и счётчиков wq):
+
+```
+crossxnu: wq death: pid=1 tid=186 state=0x4 list=idlelist first_use=0
+         flags=0x4 nthreads=3 idle=2 df=0x1 sf=0x0
+crossxnu: wq death: pid=1 tid=185 state=0x4 list=idlelist ...
+```
+
+`state=0x4` — это `TH_RUN`, то есть поток уже разбужен (планируется), но всё
+ещё учитывается в `wq_thidlelist`. Death-политика снимает его оттуда и
+отправляет `EXIT_THREAD` (`sf=0x0`, `df=0x1 = WORKQ_UNPARK_FOR_DEATH_WAS_IDLE`),
+то есть работа потока выбрасывается: libpthread завершает поток вместо того,
+чтобы выполнить событие workloop.
+
+Наивная правка «не убивать поток в `TH_RUN`, а вернуть его в userspace с пустым
+списком событий» приводит к панике (page fault по `NULL+0x1a` в
+`bsdthread_terminate` → death-путь), поэтому она откачена. Правильное место
+исправления — учёт списков: поток, которому шим отдаёт события
+(`workq_setup_thread`/`workq_handle_stack_events`), не должен оставаться в
+`wq_thidlelist`; его нужно вынимать оттуда (аналог `workq_pop_idle_thread`)
+при арминге событий, иначе death-таймер имеет право его «собрать».
