@@ -1,10 +1,10 @@
 # Boot в QEMU (phase 1)
 
-**Статус:** ядро линкуется, грузится в QEMU, проходит kalloc, kext scan,
-PRNG, `vm_map_store`, IOKit, BSD init и сеть. HFS+ теперь встроен в ядро
-(`upstream/hfs`), `memdev` отдаёт `__ROOTIMG` как `/dev/md0`, HFS+ root
-монтируется, стартует pid 1 (`init`). Следующий блокер — запуск реального
-`launchd`/прав/entitlements.
+**Статус:** ядро грузится в QEMU, проходит kalloc, kext scan, PRNG,
+`vm_map_store`, IOKit, BSD init и сеть. HFS+ встроен в ядро
+(`upstream/hfs`), recovery-root монтируется, `launchd` реально
+исполняется (Darwin Ignition Sequence). Recovery выходит с
+`ignition blob not available` — это уже userland, а не паника ядра.
 
 ## Схема
 

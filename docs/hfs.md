@@ -87,3 +87,11 @@ vm: initializing swap
 Дальше создаётся pid 1 (`init`) и ядро падает в
 `IOCurrentTaskHasEntitlement` — нужен настоящий recovery-root с
 `/sbin/launchd` и разбор прав/entitlements.
+
+## Recovery launchd
+
+Полный recovery-root (`x86_64SURamDisk.dmg`, перепакованный в HFS+)
+монтируется, `load_init_program` запускает `/sbin/launchd`, тот
+печатает Darwin Ignition Sequence. Затем recovery сам завершает
+работу: `ignition blob not available` — нужен ignition blob от
+iBoot (или обычный, не-recovery root). Это не паника ядра.
