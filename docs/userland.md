@@ -435,3 +435,26 @@ crossxnu: user #UD rip=0x10b884d74 page_off=0xd74 insn=0f 0b 65 48 8b 04 25 ...
 (смещение `0x32d74`) со строкой
 `BUG IN LIBDISPATCH: Unable to limit cooperative pool size` — то есть
 следующий шаг упирается в настройку cooperative pool, а значит в `workq_*`.
+
+#### libdispatch: лимит cooperative pool и root queues
+
+Следующая остановка была в libdispatch, и она оказалась дешёвой:
+`__dispatch_root_queues_init_once` пишет в sysctl
+`kern.wq_limit_cooperative_threads` значение `-1`. Обработчик в
+`bsd/pthread/pthread_workqueue.c` возвращал `ENOTSUP`, если у процесса ещё нет
+workqueue (`p->p_wqptr == NULL`, а его ставит только `workq_open`), и
+libdispatch из-за этого делал `trap` со строкой
+`BUG IN LIBDISPATCH: Unable to limit cooperative pool size`.
+
+Под permissive обработчик теперь принимает `-1`/`0` и игнорирует запрос, если
+workqueue нет (с записью в лог). После этого libdispatch пошёл дальше и упал на
+следующей проверке:
+
+```text
+crossxnu: user #UD rip=0x101704d74 page_off=0xd74 insn=0f 0b 65 48 8b 04 25 ...
+```
+
+Это `__dispatch_root_queues_init_once.cold.2` (`libdispatch.dylib+0x32d57`),
+строка `BUG IN LIBDISPATCH: Root queue initialization failed` — то есть
+создание root queue'ов требует уже настоящих workqueue-потоков
+(`bsdthread_create` + `workq_*`), а не заглушек.
