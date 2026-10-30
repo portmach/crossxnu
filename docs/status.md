@@ -69,13 +69,13 @@ build/mig/mig -cc toolchain/bin/clang \
 - [x] cctools-port `ld64` линкует `kernel`:
       `MH_EXECUTE`, `NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`.
 - [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
-- [ ] Ядро доходит до `kalloc_type_distribute_budget()` и падает; см. [`boot.md`](boot.md).
+- [ ] kalloc пройден; ядро падает на `can't perform kext scan: no kext summary`; см. [`boot.md`](boot.md).
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `kalloc_type_distribute_budget()` divide error (bare и fileset) | разобрать kalloc views / kext-entry / реальные kext’ы | **высокий** |
+| 1 | `can’t perform kext scan: no kext summary` | добавить минимальные kext’ы/codeless summary в fileset | **высокий** |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |

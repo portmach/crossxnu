@@ -87,17 +87,18 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
 ```
 
 `kc-builder` делает `MH_FILESET` с флагом `MH_DYLIB_IN_CACHE`;
-загрузчик это уже понимает (`KC_hdrs_vaddr`). Проверка fileset в QEMU
-дала **ту же** панику `kalloc_type_distribute_budget()`.
+загрузчик это уже понимает (`KC_hdrs_vaddr`).
 
-Диагностика через QEMU monitor: `kt_count = 8` (var views),
-`kt_freq_list[0] = 1`, `kt_freq_list_total` полностью нулевой. Секция
-`__kalloc_type` непустая, первые записи выглядят валидно
-(`kt_flags=0x806c`, `kt_size=0x30`). То есть проблема уже в
-`kalloc_type_view_copy()`/`kt_buffer`, а не в отсутствии секции.
+После патча 0014 (section bounds + zero-denominator guards) kalloc
+**проходит**. Теперь ядро доходит до kext scan и паникует:
 
-Следующий шаг — инструментировать `kalloc_type_view_copy()` и
-`kalloc_type_handle_parray_var()`, а не добавлять новые section-патчи.
+```text
+can't perform kext scan: no kext summary
+```
+
+Это ожидаемо для пустого fileset: в KC нет ни одного kext’а и нет
+`__PRELINK_INFO`/kext summary. Следующий шаг — добавить минимальные
+kext’ы (или валидный codeless summary) в `kc-builder`.
 
 ## Bare-путь (экспериментально)
 
