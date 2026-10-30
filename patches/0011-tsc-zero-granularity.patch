@@ -1,8 +1,48 @@
 diff --git a/osfmk/i386/tsc.c b/osfmk/i386/tsc.c
-index 3addcb6..df2bf46 100644
+index 3addcb6..cb6a902 100644
 --- a/osfmk/i386/tsc.c
 +++ b/osfmk/i386/tsc.c
-@@ -202,6 +202,20 @@ tsc_init(void)
+@@ -139,8 +139,30 @@ void
+ tsc_init(void)
+ {
+ 	boolean_t       N_by_2_bus_ratio = FALSE;
++	uint64_t        dtTscFreq;
+ 
+-	if (cpuid_vmm_present()) {
++	/*
++	 * crossxnu: the loader measures the TSC against the firmware timer and
++	 * publishes the result as "TSCFrequency" in the device tree.  Prefer it
++	 * when present: under QEMU/TCG CPUID.0x15 has no usable N/M pair, and the
++	 * bus-frequency fallback below under-estimates the real TSC rate by more
++	 * than an order of magnitude, which makes every timeout, timer and
++	 * "idle thread" decision fire far too early.
++	 */
++	dtTscFreq = EFI_get_frequency("TSCFrequency");
++	if (dtTscFreq != 0) {
++		tscFreq = dtTscFreq;
++		busFreq = EFI_get_frequency("FSBFrequency");
++		if (busFreq == 0) {
++			busFreq = BASE_NHM_CLOCK_SOURCE;
++		}
++		tscGranularity = tscFreq / busFreq;
++		kprintf("crossxnu: TSC frequency from device tree: %llu Hz "
++		    "(bus %llu Hz, ratio %llu)\n", tscFreq, busFreq,
++		    (uint64_t)tscGranularity);
++	}
++
++	if (dtTscFreq == 0 && cpuid_vmm_present()) {
+ 		kprintf("VMM vendor %s TSC frequency %u KHz bus frequency %u KHz\n",
+ 		    cpuid_vmm_family_string(),
+ 		    cpuid_vmm_info()->cpuid_vmm_tsc_frequency,
+@@ -164,6 +186,7 @@ tsc_init(void)
+ 		}
+ 	}
+ 
++	if (dtTscFreq == 0) {
+ 	switch (cpuid_cpufamily()) {
+ 	case CPUFAMILY_INTEL_KABYLAKE:
+ 	case CPUFAMILY_INTEL_ICELAKE:
+@@ -202,6 +225,20 @@ tsc_init(void)
  			}
  		}
  
@@ -23,10 +63,12 @@ index 3addcb6..df2bf46 100644
  		assert(N != 0);
  		assert(M != 1);
  		tscFreq = refFreq * N / M;
-@@ -254,6 +268,15 @@ tsc_init(void)
+@@ -253,6 +290,16 @@ tsc_init(void)
+ 		busFreq = EFI_get_frequency("FSBFrequency");
  	}
  	}
- 
++	}
++
 +	/*
 +	 * QEMU/TCG does not expose a valid MSR_PLATFORM_INFO flex ratio.
 +	 * Apple hardware always has a non-zero ratio; use 1 instead of
@@ -35,7 +77,6 @@ index 3addcb6..df2bf46 100644
 +	if (tscGranularity == 0) {
 +		tscGranularity = 1;
 +	}
-+
+ 
  	if (busFreq != 0) {
  		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
- 		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;

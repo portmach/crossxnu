@@ -49,7 +49,7 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0007 | `0007-security-permissive-profile.patch` | permissive TrustCache/CodeSignature под `CROSSXNU_SECURITY_PERMISSIVE` | **security**: проверки отключены, ABI сохранён |
 | 0009 | `0009-iokit-internal-ioservice-include.patch` | полный `IOService` для `IOKitKernelInternal.h` | нет |
 | 0010 | `0010-kextsymboltool-output-file.patch` | `kextsymboltool` пишет во временный файл вместо `/dev/null` | нет |
-| 0011 | `0011-tsc-zero-granularity.patch` | QEMU CPUID.0x15 denominator=0 / flex ratio=0 | низкий: timing |
+| 0011 | `0011-tsc-zero-granularity.patch` | QEMU CPUID.0x15 denominator=0 / flex ratio=0; плюс приоритет `TSCFrequency` из device tree (loader измеряет TSC по firmware-таймеру) — без него гостевые часы шли в ~35 раз быстрее реального времени | **да, timing**: все таймауты и «idle»-эвристики workqueue |
 | 0012 | `0012-early-sse-enable.patch` | включить CR4.OSFXSR до C-кода | нет |
 | 0013 | `0013-x86-bare-kc-static.patch` | bare `MH_EXECUTE` считать `KCFormatStatic` | средний: KC |
 | 0014 | `0014-kalloc-static-section-bounds.patch` | границы `__kalloc_type`-секций через Mach-O headers; fileset top-level; zero-zone guards | **да, kalloc**: без type-зон бюджет не распределяется |
@@ -112,11 +112,11 @@ echo 0007-my-change.patch >> patches/series
 Не обновляйте тег «заодно» с другими изменениями: смешение версии и
 патчей делает diff с Apple-сборкой бессмысленным.
 
-### Bring-up серия 0022–0027
+### Bring-up серия 0022–0028
 
 Появилась после первых успешных загрузок: это то, что делает ядро пригодным
 для запуска настоящего userland на не-macOS железе. Проверено: `git checkout -- .`
-в сабмодуле `upstream/xnu` + `scripts/apply-patches.sh` (25 патчей) +
+в сабмодуле `upstream/xnu` + `scripts/apply-patches.sh` (26 патчей) +
 `scripts/sync-hfs.sh` восстанавливают рабочее дерево **байт в байт**, и ядро
 собирается (размер совпадает; SHA-256 отличается только вшитой датой сборки).
 
@@ -128,3 +128,19 @@ echo 0007-my-change.patch >> patches/series
 | `0025-security-permissive-runtime.patch` | permissive-режим: пропуск signed blobs, отключение taint-проверки текстовых страниц, отчёт о user `#UD` |
 | `0026-crypto-without-corecrypto.patch` | md5/sha2 без corecrypto KEC (ранние вызовы до загрузки kext) |
 | `0027-iokit-platform-glue.patch` | glue `IOKitBSDInit` и `iokit/conf/files` для сборки без Xcode |
+| `0028-bringup-tracing.patch` | временная bring-up диагностика: трассировка syscall/mach-trap/path для pid 1, дамп планировщика и workqueue по сторожевому таймеру |
+
+Существенные детали `0024` (проверены на живой загрузке, см. `docs/status.md`):
+
+* `bsdthread_terminate()` из `pthread_shims.c` **сам** вызывает
+  `workq_thread_terminate()` для `THREAD_TAG_WORKQUEUE` — шиму kext-таблицы
+  этого делать нельзя, повторный вызов ловит `ud1` в `TAILQ_REMOVE()` по уже
+  отвязанному uthread.
+* `bsdthread_create()` создаёт поток и **сам** его возобновляет, предварительно
+  записав `copyout` имя thread-порта в `struct pthread_s` по смещению `0xf8`:
+  иначе `__pthread_start()` падает с «Unable to allocate thread port», а если
+  оставить поток suspended — он не запустится никогда (libpthread не вызывает
+  `thread_resume()`).
+
+`0028` — диагностика, а не функциональность: её можно и нужно выкинуть, когда
+ранний userland станет стабильным.

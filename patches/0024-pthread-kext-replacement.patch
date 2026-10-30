@@ -1,3 +1,5 @@
+diff --git a/bsd/pthread/pthread_shims.c b/bsd/pthread/pthread_shims.c
+index 49fb60b..9b016cd 100644
 --- a/bsd/pthread/pthread_shims.c
 +++ b/bsd/pthread/pthread_shims.c
 @@ -60,6 +60,14 @@
@@ -15,7 +17,17 @@
  #define PTHREAD_CALLBACK_MEMBER kevent_workq_internal
  
  /* compile time asserts to check the length of structures in pthread_shims.h */
-@@ -312,36 +320,720 @@
+@@ -70,6 +78,9 @@ static_assert((sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_call
+ extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
+ extern void thread_deallocate_safe(thread_t thread);
+ 
++/* crossxnu: temporary bring-up diagnostic, implemented in osfmk/kern/bsd_kern.c */
++extern void crossxnu_threads_dump(struct proc *p, const char *where);
++
+ #define PTHREAD_STRUCT_ACCESSOR(get, set, rettype, structtype, member) \
+ 	static rettype \
+ 	get(structtype x) { \
+@@ -312,36 +323,775 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
  
  /* kernel (core) to kext shims */
  
@@ -101,6 +113,8 @@
 + *   thread_set_wq_state64()           - user rip/rsp/rdi/rsi/rdx for it
 + *   convert_thread_to_port_immovable()- the port libpthread gets back
 + */
++#define CROSSXNU_PTHREAD_PORT_OFFSET   0xf8
++
 +static int
 +crossxnu_bsdthread_create(struct proc *p, user_addr_t user_func,
 +    user_addr_t user_funcarg, user_addr_t user_stack, user_addr_t user_pthread,
@@ -111,6 +125,8 @@
 +	x86_thread_state64_t   state;
 +	ipc_port_t             sright;
 +	int32_t                name;
++	uint32_t               port_name;
++	int                    err;
 +
 +	(void)flags;
 +
@@ -118,14 +134,19 @@
 -	 * crossxnu: com.apple.kec.pthread is a kernel external component and is
 -	 * absent from a synthetic kernel collection.  Boot can continue without
 -	 * it; pthread syscalls will fail once userland actually uses them.
-+	 * crossxnu: pthread_create(), attempt "create suspended".
++	 * crossxnu: pthread_create().
 +	 *
-+	 * The thread must not run before userland has recorded the thread port in
-+	 * its pthread struct: __pthread_start() checks `pthread->port` (offset
-+	 * 0xf8) right after thread_selfid() and traps with "Unable to allocate
-+	 * thread port, possible port leak" while it is still zero.  So: build the
-+	 * thread, give it its user state and TSD base, hand the port back through
-+	 * *retval, and leave the thread suspended for userland to start.
++	 * libpthread's new-thread entry point checks `pthread->port` (a 32-bit
++	 * port name at offset 0xf8 of struct pthread_s) right after it asks for
++	 * its thread id, and traps with
++	 *
++	 *     "Unable to allocate thread port, possible port leak"
++	 *
++	 * when the slot does not hold a live port name yet.  libpthread does not
++	 * resume the thread itself (it never calls thread_resume), so the kernel
++	 * has to: publish the port name into the user pthread struct first, then
++	 * resume.  Leaving the thread suspended made pthread_create() threads
++	 * that never ran at all.
  	 */
 -	if (!pthread_functions) {
 -		printf("crossxnu: pthread KEC not loaded; skipping pthread_init\n");
@@ -162,10 +183,39 @@
 +	name = (int32_t)ipc_port_copyout_send_pinned(sright,
 +	    get_task_ipcspace(current_task()));
 +
-+	printf("crossxnu: bsdthread_create: suspended port=%d flags=0x%x threadstart=0x%llx wqthread=0x%llx stack=0x%llx\n",
-+	    name, flags, (unsigned long long)state.rip,
++	/*
++	 * crossxnu: publish the thread port into the user pthread struct and
++	 * start the thread.
++	 *
++	 * __pthread_start() loads the port name with
++	 *
++	 *     movl 0xf8(%rbx), %eax
++	 *     leal 1(%rax), %ecx
++	 *     cmpl $1, %ecx
++	 *     jbe  <trap>
++	 *
++	 * so the port name has to be visible in user memory before the thread
++	 * runs; thread_resume() is the kernel's job because libpthread never
++	 * resumes threads it created.
++	 */
++	port_name = (uint32_t)name;
++	err = copyout(&port_name, user_pthread + CROSSXNU_PTHREAD_PORT_OFFSET,
++	    sizeof(port_name));
++	if (err != 0) {
++		printf("crossxnu: bsdthread_create: copyout(port) failed err=%d\n", err);
++		thread_deallocate(th);
++		return err;
++	}
++
++	thread_set_tag(th, THREAD_TAG_PTHREAD);
++
++	printf("crossxnu: bsdthread_create: tid=%llu port=%d flags=0x%x "
++	    "threadstart=0x%llx wqthread=0x%llx stack=0x%llx\n",
++	    (unsigned long long)thread_tid(th), name, flags,
++	    (unsigned long long)state.rip,
 +	    (unsigned long long)proc_get_wqthread(p), (unsigned long long)state.rsp);
-+	/* Deliberately not thread_resume(): userland has to store the port first. */
++
++	thread_resume(th);
 +	*retval = (user_addr_t)name;
 +	return 0;
 +}
@@ -235,6 +285,7 @@
 +{
 +	vm_map_t map = get_task_map(proc_task(p));
 +	thread_t th = current_thread();
++	uint16_t tag = thread_get_tag(th);
 +
 +	/*
 +	 * crossxnu: this is the end of pthread_exit()/_pthread_terminate().
@@ -245,15 +296,27 @@
 +	 *     PTHREAD_INTERNAL_CRASH(t, "thread didn't terminate");
 +	 *
 +	 * so this syscall must not return: the closed-source kext frees the
-+	 * thread's user stack and ends the calling thread.  Workqueue threads
-+	 * never get here (XNU calls workq_thread_terminate() first).
++	 * thread's user stack and ends the calling thread.
++	 *
++	 * Workqueue bookkeeping is *not* done here: bsdthread_terminate() above
++	 * already calls workq_thread_terminate() for THREAD_TAG_WORKQUEUE
++	 * threads before it reaches this function.  Doing it again made
++	 * TAILQ_REMOVE() in workq_thread_terminate() hit an uthread that had
++	 * already been unlinked from wq_thrunlist (ud1 = assert trap).
 +	 */
++	printf("crossxnu: bsdthread_terminate: pid=%d tag=0x%x tid=%llu "
++	    "freeaddr=0x%llx size=0x%llx\n",
++	    proc_getpid(p), tag, (unsigned long long)thread_tid(th),
++	    (unsigned long long)stackaddr, (unsigned long long)size);
++	crossxnu_workq_dump(p,
++	    (tag & THREAD_TAG_WORKQUEUE) ? get_bsdthread_info(th) : NULL,
++	    "terminate");
++	crossxnu_threads_dump(p, "terminate-pre");
++	crossxnu_watchdog_arm();
++
 +	if (stackaddr != 0 && size != 0) {
 +		(void)vm_deallocate(map, stackaddr, size);
- 	}
-+
-+	printf("crossxnu: bsdthread_terminate: pid=%d freeaddr=0x%llx size=0x%llx\n",
-+	    proc_getpid(p), (unsigned long long)stackaddr, (unsigned long long)size);
++	}
 +
 +	thread_terminate_self();
 +
@@ -455,7 +518,7 @@
 +	if (events == 0 || nevents < 0) {
 +		events = sc.eventlist;
 +		nevents = 0;
-+	}
+ 	}
 +
 +	error = kevent_workq_internal(p, 0, 0, events, nevents, sc.data_out,
 +	    &data_available, KEVENT_FLAG_STACK_DATA | KEVENT_FLAG_IMMEDIATE |
@@ -657,8 +720,12 @@
 +	state.r9  = (uint64_t)(uint32_t)nkevents;
 +
 +	if ((setup_flags & CROSSXNU_WQ_SETUP_EXIT_THREAD) == 0 && nkevents > 0) {
-+		printf("crossxnu: workq_setup_thread: pid=%d events=%d flags=0x%x\n",
-+		    proc_getpid(p), nkevents, upcall_flags);
++		printf("crossxnu: workq_setup_thread: pid=%d tid=%llu events=%d "
++		    "flags=0x%x\n", proc_getpid(p),
++		    (unsigned long long)thread_tid(th), nkevents, upcall_flags);
++	} else if (setup_flags & CROSSXNU_WQ_SETUP_EXIT_THREAD) {
++		printf("crossxnu: workq_setup_thread: pid=%d tid=%llu EXIT_THREAD\n",
++		    proc_getpid(p), (unsigned long long)thread_tid(th));
 +	}
 +
 +	(void)thread_set_wq_state64(th, (thread_state_t)&state);
@@ -746,7 +813,7 @@
  	pthread_functions->pth_proc_hashdelete(p);
  }
  
-@@ -349,12 +1041,16 @@
+@@ -349,12 +1099,16 @@ pth_proc_hashdelete(proc_t p)
  int
  bsdthread_create(struct proc *p, struct bsdthread_create_args *uap, user_addr_t *retval)
  {
@@ -763,7 +830,7 @@
  	kern_return_t kr;
  	static_assert(offsetof(struct bsdthread_register_args, threadstart) + sizeof(user_addr_t) ==
  	    offsetof(struct bsdthread_register_args, wqthread));
-@@ -377,6 +1073,8 @@
+@@ -377,6 +1131,8 @@ bsdthread_register(struct proc *p, struct bsdthread_register_args *uap, __unused
  int
  bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_t *retval)
  {
@@ -772,7 +839,16 @@
  	thread_t th = current_thread();
  	uthread_t uth = current_uthread();
  	struct _bsdthread_terminate *bts = &uth->uu_save.uus_bsdthread_terminate;
-@@ -413,6 +1111,12 @@
+@@ -385,6 +1141,8 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
+ 	uint16_t tag = thread_get_tag(th);
+ 
+ 	if (tag & THREAD_TAG_WORKQUEUE) {
++		/* crossxnu: temporary bring-up diagnostic */
++		crossxnu_workq_dump(p, uth, "terminate-pre");
+ 		workq_thread_terminate(p, get_bsdthread_info(th));
+ 	} else if (tag & THREAD_TAG_AIO_WORKQUEUE) {
+ 		return ENOTSUP;
+@@ -413,6 +1171,12 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
  int
  thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t *retval)
  {
@@ -785,7 +861,7 @@
  	return pthread_functions->thread_selfid(p, retval);
  }
  
-@@ -421,54 +1125,72 @@
+@@ -421,54 +1185,72 @@ thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t
  int
  psynch_mutexwait(proc_t p, struct psynch_mutexwait_args *uap, uint32_t *retval)
  {
@@ -858,7 +934,7 @@
  	return pthread_functions->psynch_rw_unlock(p, uap->rwlock, uap->lgenval, uap->ugenval, uap->rw_wc, uap->flags, retval);
  }
  
-@@ -481,24 +1203,32 @@
+@@ -481,24 +1263,32 @@ psynch_rw_unlock2(__unused proc_t p, __unused struct psynch_rw_unlock2_args *uap
  int
  psynch_rw_wrlock(proc_t p, struct psynch_rw_wrlock_args *uap, uint32_t *retval)
  {
@@ -891,7 +967,7 @@
  	return 0;
  }
  
-@@ -634,7 +1364,17 @@
+@@ -634,7 +1424,17 @@ static const struct pthread_callbacks_s pthread_callbacks = {
  };
  
  SECURITY_READ_ONLY_LATE(pthread_callbacks_t) pthread_kern = &pthread_callbacks;
@@ -910,9 +986,11 @@
  
  /*
   * pthread_kext_register is called by pthread.kext upon load, it has to provide
+diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
+index cb27db6..78cf53c 100644
 --- a/bsd/pthread/pthread_workqueue.c
 +++ b/bsd/pthread/pthread_workqueue.c
-@@ -226,8 +226,23 @@
+@@ -226,8 +226,23 @@ wq_limit_cooperative_threads_for_proc SYSCTL_HANDLER_ARGS
  		}
  		workq_unlock(wq);
  	} else {
@@ -936,3 +1014,104 @@
  	}
  
  out:
+@@ -953,6 +968,80 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+ 	    uth->uu_save.uus_workq_park_data.idle_stamp + delay);
+ }
+ 
++void
++crossxnu_workq_dump(struct proc *p, struct uthread *uth, const char *where)
++{
++	struct workqueue *wq = proc_get_wqptr_fast(p);
++
++	if (wq == NULL) {
++		printf("crossxnu: wq(%s): pid=%d no workqueue\n",
++		    where, proc_getpid(p));
++		return;
++	}
++	printf("crossxnu: wq(%s): pid=%d nthreads=%u idle=%u req=%u dying=%u "
++	    "creator=%d runlist_empty=%d newlist_empty=%d idlelist_empty=%d\n",
++	    where, proc_getpid(p), wq->wq_nthreads, wq->wq_thidlecount,
++	    wq->wq_reqcount, wq->wq_thdying_count, wq->wq_creator != NULL,
++	    TAILQ_EMPTY(&wq->wq_thrunlist), TAILQ_EMPTY(&wq->wq_thnewlist),
++	    TAILQ_EMPTY(&wq->wq_thidlelist));
++	if (uth != NULL) {
++		printf("crossxnu: wq(%s): flags=0x%x bound=%d kqr_bound=%d "
++		    "pri=%u/%u\n", where, uth->uu_workq_flags,
++		    workq_thread_is_permanently_bound(uth),
++		    uth->uu_kqr_bound != NULL,
++		    uth->uu_workq_pri.qos_bucket, uth->uu_workq_pri.qos_req);
++	}
++}
++
++/*
++ * crossxnu: temporary bring-up diagnostic.
++ *
++ * When launchd stops making progress the kernel stops printing anything, so
++ * there is no way to tell which thread is blocked where.  This delayed thread
++ * call dumps, a few seconds after a workqueue thread of pid 1 goes away, the
++ * scheduler state of every thread in the process: the kernel continuation each
++ * one is parked in and its wait event.  The continuation address names the
++ * exact blocking primitive (mach_msg, kevent, ulock, ...).
++ */
++extern void crossxnu_threads_dump(struct proc *p, const char *where);
++
++static thread_call_t crossxnu_wd_call;
++
++static void
++crossxnu_wd_dump(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++{
++	proc_t p = proc_find(1);
++	uint64_t now, delta, deadline;
++
++	if (p == NULL) {
++		printf("crossxnu: wd: pid 1 is gone\n");
++		return;
++	}
++	crossxnu_threads_dump(p, "watchdog");
++	crossxnu_workq_dump(p, NULL, "watchdog");
++	proc_rele(p);
++
++	if (crossxnu_wd_call != NULL) {
++		now = mach_absolute_time();
++		nanoseconds_to_absolutetime(15ULL * NSEC_PER_SEC, &delta);
++		deadline = now + delta;
++		thread_call_enter_delayed(crossxnu_wd_call, deadline);
++	}
++}
++
++void
++crossxnu_watchdog_arm(void)
++{
++	uint64_t delta, deadline;
++
++	if (crossxnu_wd_call == NULL) {
++		crossxnu_wd_call = thread_call_allocate(crossxnu_wd_dump, NULL);
++	}
++	nanoseconds_to_absolutetime(15ULL * NSEC_PER_SEC, &delta);
++	deadline = mach_absolute_time() + delta;
++	thread_call_enter_delayed(crossxnu_wd_call, deadline);
++}
++
+ void
+ workq_thread_terminate(struct proc *p, struct uthread *uth)
+ {
+diff --git a/bsd/pthread/workqueue_internal.h b/bsd/pthread/workqueue_internal.h
+index 5cb5dc6..59d5bbb 100644
+--- a/bsd/pthread/workqueue_internal.h
++++ b/bsd/pthread/workqueue_internal.h
+@@ -306,6 +306,15 @@ void workq_thread_set_max_qos(struct proc *p, struct workq_threadreq_s *kqr);
+ 
+ void workq_thread_terminate(struct proc *p, struct uthread *uth);
+ 
++/*
++ * crossxnu: temporary bring-up diagnostics.  crossxnu_workq_dump() prints the
++ * workqueue bookkeeping of a process (called from bsdthread_terminate() to see
++ * what state a workqueue thread leaves behind); crossxnu_watchdog_arm() starts
++ * a delayed dump of the scheduler state of every pid 1 thread.
++ */
++void crossxnu_workq_dump(struct proc *p, struct uthread *uth, const char *where);
++void crossxnu_watchdog_arm(void);
++
+ __options_decl(workq_kern_threadreq_flags_t, uint32_t, {
+ 	WORKQ_THREADREQ_NONE                = 0x00,
+ 	WORKQ_THREADREQ_SET_AST_ON_FAILURE  = 0x01,

@@ -112,19 +112,23 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 
 ## 5. Ближайшие шаги
 
-1. Запустить recovery-`launchd` как pid 1 с записываемым `/private/var`
-   (`md1` уже работает): `mkdir -p /private/var`, `mount -t hfs /dev/md1
-   /private/var`, затем `exec /sbin/launchd`. Для этого `userland/init.c`
-   должен готовить `/private/var` до `execve()`.
-2. Разобрать SIGILL в recovery-`launchd` (userland уже выполняется, см.
-   [`userland.md`](userland.md)).
-3. Вынести правки ядра (pthread/AMFI guards, serial-шим, md1, дисковые ioctl,
-   `__nochk_bcopy` в HFS+) в `patches/`.
-4. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
+1. **[сделано]** Запустить `launchd` как pid 1 с записываемым `/private/var`:
+   `userland/rc.launchd` готовит каталоги и `exec`-ит `/sbin/launchd.real`.
+   `launchd` проходит все boot tasks (mount-phase-1/2, data-protection,
+   keystore-init, fips, dirs_cleaner, …) и печатает
+   `launchd logging initialized. name: com.apple.xpc.launchd pid: 1`.
+2. **[сделано]** SIGILL в `launchd` разобран — это были два бага нашего
+   pthread-kext-замещения, а не `launchd` (см. §7).
+3. **[сделано]** Правки ядра вынесены в `patches/` (серия 0001–0028).
+4. **[следующее]** Понять, почему после `logging initialized` процесс стоит на
+   трёх потоках без работы (см. §7): подозреваются работа kevent/workloop и
+   слишком быстрые таймеры (гостевые часы идут кратно быстрее реального
+   времени, а workqueue убивает «простаивающие» потоки по таймеру).
+5. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
    из asset'а; без неё обычный userland не запустится.
-5. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
-6. Собрать полноценный `libcc_kext` вместо shim; вернуть LTO.
-7. Повторить для `DEVELOPMENT`, затем для `arm64`.
+6. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
+7. Собрать полноценный `libcc_kext` вместо shim; вернуть LTO.
+8. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал
 
@@ -178,3 +182,87 @@ cx=eventlist,
 | 2026-10-30 | Обязательный boot-таск `dirs_cleaner` отсутствовал в ramdisk → launchd сам объявлял `Panicking in 3 seconds`. Скопирован `/usr/libexec/dirs_cleaner` из полного macOS-рута (`~/aa/root`); остальные отсутствующие boot-таски — optional. |
 | 2026-10-30 | Созданы `/private/var/{log,db,run}/com.apple.xpc.launchd` и `/private/var/boot`; `launchd.log` — симлинк на `/dev/console`. Тестовый `com.crossxnu.hello` (RunAtLoad, вывод на консоль) пока не запускается. |
 | 2026-10-30 | launchd стабилен (4 загрузки, паники нет), но после `launchd logging initialized` замолкает — похоже, блокируется. Главные подозреваемые: заглушки `psynch_*` (ENOTSUP) в мьютексах libpthread/libdispatch и незакрытый `setiopolicy_np`. |
+
+## 7. Зависание после `launchd logging initialized` (2026-10-30)
+
+Расследование шло с временной диагностикой из `0028-bringup-tracing.patch`:
+трассировка каждого syscall/mach-trap pid 1 с tid и user-RIP, трассировка
+открываемых путей, а также сторожевой `thread_call`, который через 15 с после
+каждого завершения потока печатает состояние планировщика всех потоков pid 1
+(`cont=` — ядровая continuation, `ev=` — wait event, `sys=/` — счётчики
+syscall/mach-trap, `cs=` — переключения контекста) и состояние workqueue
+(`nthreads`, `idle`, `req`, `dying`, `creator`, пустоту трёх списков).
+
+### Что было сломано и исправлено
+
+1. **Двойной `workq_thread_terminate()`.** `bsdthread_terminate()` в
+   `pthread_shims.c` сам вызывает `workq_thread_terminate()` для
+   `THREAD_TAG_WORKQUEUE` **до** того, как передать управление таблице
+   `pthread_functions`. Наш шим вызывал функцию ещё раз → `TAILQ_REMOVE()` по
+   уже отвязанному uthread → `ud1` (assert-trap) внутри
+   `workq_thread_terminate` (`panic: Kernel trap type 6=invalid opcode`,
+   `RIP=workq_thread_terminate+0x138`). Исправление: шим не трогает workqueue
+   bookkeeping, только освобождает стек и завершает поток.
+2. **Потоки `pthread_create()` никогда не запускались.** `bsdthread_create`
+   создавал поток и оставлял его suspended в расчёте на `thread_resume()` из
+   libpthread. libpthread его не вызывает (в трассировке нет ни одного
+   `thread_resume`). В дампе это выглядело так: `tid=183 tag=0x0 state=0x9
+   cont=thread_bootstrap_return sys=0/0 cs=0` — поток создан и не разу не
+   планировался. Исправление: ядро само делает `copyout` имени thread-порта в
+   `struct pthread_s` по смещению `0xf8` (это проверка `__pthread_start`:
+   `movl 0xf8(%rbx),%eax; leal 1(%rax),%ecx; cmpl $1,%ecx; jbe <trap>`
+   «Unable to allocate thread port, possible port leak»), ставит
+   `THREAD_TAG_PTHREAD` и вызывает `thread_resume()`.
+
+### Где именно стоит процесс сейчас
+
+После обоих исправлений загрузка доходит до конца boot-задач, а затем:
+
+* главный поток (`tag=0x1`) завершается — это **нормально**: в
+  `libdispatch.dylib` `dispatch_main()` в конце делает `pthread_exit(NULL)`
+  (проверено дизассемблером: `_dispatch_main` → `_dispatch_main_queue_drain`
+  → `__dispatch_program_is_probably_callback_driven=1` → `_pthread_exit`),
+  после чего очередь main обслуживается workqueue-потоками;
+* в процессе остаются 3 потока, все в ожидании:
+  `tid=184 tag=0x30 state=0x1 cont=workq_unpark_continue` (парковка wq),
+  `tid=186 tag=0x30 state=0x41 cont=filt_wlwait_continue ev=<kqueue>` (workloop
+  ждёт события), `tid=187 tag=0x10 state=0x1 cont=__sleep_continue`
+  (sigsuspend — штатный поток обработки сигналов launchd);
+* workqueue: `nthreads=2 idle=1 req=0 dying=0` — новых запросов нет;
+* QEMU: после ~2 минут CPU-время перестаёт расти (процесс заблокирован, не
+  крутится вхолостую);
+* launchd больше не открывает ни одного файла: `path`-трассировка показывает
+  только `/System/Library/LaunchDaemons/com.apple.jetsamproperties.*.plist`, а
+  `/Library/LaunchDaemons/com.crossxnu.hello.plist` не открывается — то есть
+  до сканирования job-базы дело не доходит.
+
+Значит, либо в очередь main не попадает работа (тогда нужен разбор
+libdispatch-стороны), либо работа есть, но kevent/workloop не будит поток.
+Косвенный аргумент в пользу второй версии: гостевые часы идут кратно быстрее
+реального времени (`launchd` печатает 45 минут через несколько секунд после
+старта), а workqueue убивает «простаивающие» потоки по таймеру — при кривом
+timebase это происходит слишком рано, и пробуждение может теряться.
+Следующий шаг — проверить и починить пересчёт TSC→timebase
+(`osfmk/i386/tsc.c`, `patch 0011`), затем повторить прогон.
+
+### Часы гостя (TSC→timebase), 2026-10-30
+
+Отдельная находка по пути: `launchd` печатал время `1970-01-01 01:17:35` при
+загрузке, занимавшей ~2 минуты, то есть гостевые часы шли в десятки раз
+быстрее реального времени. Причина: под QEMU/TCG CPUID.0x15 не даёт
+работоспособной пары N/M (а `MSR_PLATFORM_INFO` — flex ratio), и `tsc_init()`
+уходил в fallback `tscFreq = FSBFrequency` = 100 МГц, тогда как реальный TSC в
+эмуляции ~3.8 ГГц. Наш UEFI-loader уже измеряет TSC по firmware-таймеру
+(`estimate_tsc_frequency()`, `BS->Stall`) и публикует `TSCFrequency` в device
+tree — теперь `tsc_init()` предпочитает это значение (patch 0011).
+После правки время в логе стало совпадать с реальным (`00:02:10` вместо
+`01:17:35` на том же этапе загрузки).
+
+На само зависание это не повлияло: финальное состояние то же (3 потока,
+`req=0`, все в ожидании), но правильные часы убирают целый класс ложных
+таймаутов и делают дальнейшую диагностику осмысленной.
+| 2026-10-30 | Разобран `panic` `ud1` в `workq_thread_terminate`: наш `bsdthread_terminate` вызывал `workq_thread_terminate()` второй раз (XNU вызывает его сам до передачи в таблицу kext-функций) → `TAILQ_REMOVE()` по уже отвязанному uthread. Двойной вызов убран. |
+| 2026-10-30 | Найдено, что потоки `pthread_create()` вообще не запускались: `cont=thread_bootstrap_return sys=0/0 cs=0`. libpthread не вызывает `thread_resume()`; теперь ядро само пишет имя порта в `struct pthread_s+0xf8` (`copyout`) и вызывает `thread_resume()`. |
+| 2026-10-30 | Сторожевой дамп планировщика показал: после `logging initialized` главный поток завершается **штатно** (`dispatch_main()` → `pthread_exit`), остаются 3 потока в ожидании и `req=0` у workqueue; процесс блокируется, а не крутится (CPU-время QEMU перестаёт расти). |
+| 2026-10-30 | Исправлены гостевые часы: `tsc_init()` теперь берёт `TSCFrequency` из device tree (loader мерил TSC по `BS->Stall`); было ~35× быстрее реального времени. |
+| 2026-10-30 | Патч-серия переразбита: `0024` (pthread) и новый `0028-bringup-tracing` (диагностика); `0011` дополнен TSC-частотой из DT. Проверено: `apply-patches.sh` (26 патчей) воспроизводит дерево байт в байт. |

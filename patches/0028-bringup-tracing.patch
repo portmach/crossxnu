@@ -1,0 +1,266 @@
+diff --git a/bsd/dev/i386/systemcalls.c b/bsd/dev/i386/systemcalls.c
+index a352414..22e7efc 100644
+--- a/bsd/dev/i386/systemcalls.c
++++ b/bsd/dev/i386/systemcalls.c
+@@ -59,6 +59,129 @@
+ 
+ #if CONFIG_MACF
+ #include <security/mac_framework.h>
++
++/*
++ * crossxnu: bring-up tracing for pid 1.
++ *
++ * Prints every syscall and mach trap of pid 1 with the calling thread id and
++ * its user-space return address, plus the paths it opens, so that the tail of
++ * the log identifies what launchd was doing when it stopped making progress.
++ */
++extern void crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b);
++extern void crossxnu_trace_path(struct proc *p, int code, uint64_t *arg);
++
++void
++crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b)
++{
++	static int nsys, nmach, nfork;
++	struct proc *cp = current_proc();
++	uint64_t tid;
++
++	if (cp == NULL || cp->p_pid != 1 ||
++	    strncmp(cp->p_comm, "launchd", 7) != 0) {
++		return;
++	}
++	tid = thread_tid(current_thread());
++	if (what[0] == 's') {
++		nsys++;
++		if (nsys <= 1200) {
++			printf("crossxnu: p1 sys %llu tid=%llu rip=0x%llx\n",
++			    a, tid, b);
++		} else {
++			printf("S%llu.%llu ", a, tid);
++			if (nsys % 8 == 0) {
++				printf("\n");
++			}
++		}
++	} else if (what[0] == 'm') {
++		nmach++;
++		if (nmach <= 800) {
++			printf("crossxnu: p1 mach %llu tid=%llu rip=0x%llx\n",
++			    a, tid, b);
++		} else {
++			printf("M%llu.%llu ", a, tid);
++			if (nmach % 8 == 0) {
++				printf("\n");
++			}
++		}
++	} else {
++		nfork++;
++		if (nfork <= 200) {
++			printf("crossxnu: fork %llu -> %llu\n", a, b);
++		}
++	}
++}
++
++/*
++ * crossxnu: bring-up tracing of the paths pid 1 asks the kernel for.  Shows
++ * whether launchd reaches the point of scanning its job database
++ * (/Library/LaunchDaemons/...) or stops before it.
++ */
++extern int copyinstr(const user_addr_t uaddr, void *kaddr, size_t len,
++    size_t *done);
++
++static int
++crossxnu_path_has_launch(const char *s)
++{
++	for (; *s != '\0'; s++) {
++		if (s[0] == 'L' && s[1] == 'a' && s[2] == 'u' &&
++		    s[3] == 'n' && s[4] == 'c' && s[5] == 'h') {
++			return 1;
++		}
++	}
++	return 0;
++}
++
++void
++crossxnu_trace_path(struct proc *p, int code, uint64_t *arg)
++{
++	static int npath;
++	char buf[160];
++	user_addr_t upath;
++	size_t done = 0;
++	int idx;
++
++	if (p == NULL || p->p_pid != 1 ||
++	    strncmp(p->p_comm, "launchd", 7) != 0) {
++		return;
++	}
++	switch (code) {
++	case 5:         /* open */
++	case 59:        /* execve */
++	case 10:        /* unlink */
++	case 15:        /* chmod */
++	case 33:        /* access */
++	case 136:       /* mkdir */
++	case 220:       /* getattrlist */
++	case 338:       /* stat64 */
++	case 340:       /* lstat64 */
++	case 398:       /* open_nocancel */
++		idx = 0;
++		break;
++	case 244:       /* posix_spawn */
++	case 463:       /* openat */
++	case 464:       /* openat_nocancel */
++		idx = 1;
++		break;
++	default:
++		return;
++	}
++	upath = (user_addr_t)arg[idx];
++	if (upath == 0) {
++		return;
++	}
++	/*
++	 * copyinstr() unconditionally stores the transferred size through the
++	 * `done` pointer, so it must not be NULL.
++	 */
++	if (copyinstr(upath, buf, sizeof(buf), &done) != 0) {
++		return;
++	}
++	npath++;
++	if (npath <= 500 || crossxnu_path_has_launch(buf)) {
++		printf("crossxnu: p1 path %d <%s>\n", code, buf);
++	}
++}
+ #endif
+ 
+ #if CONFIG_DTRACE
+@@ -308,6 +431,7 @@ unix_syscall64(x86_saved_state_t *state)
+ 
+ 	code    = regs->rax & SYSCALL_NUMBER_MASK;
+ 	syscode = (code < nsysent) ? code : SYS_invalid;
++	crossxnu_trace_pid1("sys", code, regs->isf.rip);
+ 	DEBUG_KPRINT_SYSCALL_UNIX(
+ 		"unix_syscall64: code=%d(%s) rip=%llx\n",
+ 		code, syscallnames[syscode], regs->isf.rip);
+@@ -360,6 +484,9 @@ unix_syscall64(x86_saved_state_t *state)
+ 		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
+ 	}
+ 
++	/* crossxnu: bring-up tracing of file paths for pid 1 */
++	crossxnu_trace_path(p, code, (uint64_t *)vt);
++
+ 	current_cached_proc_cred_update();
+ 
+ 	uthread->uu_rval[0] = 0;
+diff --git a/bsd/kern/kern_fork.c b/bsd/kern/kern_fork.c
+index 1d8db27..a07b8d1 100644
+--- a/bsd/kern/kern_fork.c
++++ b/bsd/kern/kern_fork.c
+@@ -117,6 +117,9 @@ static void (*dtrace_proc_waitfor_hook)(proc_t) = NULL;
+ 
+ #include <security/audit/audit.h>
+ 
++/* crossxnu: temporary bring-up tracing (see bsd/dev/i386/systemcalls.c) */
++extern void crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b);
++
+ #include <mach/mach_types.h>
+ #include <kern/coalition.h>
+ #include <kern/ipc_kobject.h>
+@@ -977,6 +980,7 @@ forkproc(proc_t parent_proc, cloneproc_flags_t clone_flags)
+ 		nprocs++;
+ 
+ 		child_proc->p_pid = pid;
++	crossxnu_trace_pid1("fork", parent_proc->p_pid, (uint64_t)pid);
+ 		proc_ro_data.p_idversion = OSIncrementAtomic(&nextpidversion);
+ 		/* kernel process is handcrafted and not from fork, so start from 1 */
+ 		proc_ro_data.p_uniqueid = ++nextuniqueid;
+diff --git a/osfmk/i386/bsd_i386.c b/osfmk/i386/bsd_i386.c
+index b306145..143e29e 100644
+--- a/osfmk/i386/bsd_i386.c
++++ b/osfmk/i386/bsd_i386.c
+@@ -75,6 +75,9 @@ extern void throttle_lowpri_io(int);
+ #include <security/mac_mach_internal.h>
+ #endif
+ 
++
++/* crossxnu: temporary bring-up tracing (see bsd/dev/i386/systemcalls.c) */
++extern void crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b);
+ void * find_user_regs(thread_t);
+ 
+ unsigned int get_msr_exportmask(void);
+@@ -642,6 +645,7 @@ mach_call_munger64(x86_saved_state_t *state)
+ 	regs = saved_state64(state);
+ 
+ 	call_number = (int)(regs->rax & SYSCALL_NUMBER_MASK);
++	crossxnu_trace_pid1("mach", call_number, regs->isf.rip);
+ 
+ 	DEBUG_KPRINT_SYSCALL_MACH(
+ 		"mach_call_munger64: code=%d(%s)\n",
+diff --git a/osfmk/kern/bsd_kern.c b/osfmk/kern/bsd_kern.c
+index 70bdafc..571ef00 100644
+--- a/osfmk/kern/bsd_kern.c
++++ b/osfmk/kern/bsd_kern.c
+@@ -1519,3 +1519,65 @@ kern_return_for_errno(int bsd_errno)
+ 		return KERN_FAILURE;
+ 	}
+ }
++
++/*
++ * crossxnu: temporary bring-up diagnostic (see pthread_workqueue.c).
++ *
++ * Dumps the scheduler state of every thread of a process.  Called from a
++ * delayed thread call when pid 1 stops making progress, to name the blocking
++ * primitive through the kernel continuation each thread is parked in.
++ */
++void crossxnu_threads_dump(struct proc *p, const char *where);
++
++void
++crossxnu_threads_dump(struct proc *p, const char *where)
++{
++	task_t task = proc_task(p);
++	thread_t th;
++	uint64_t tids[24];
++	uint16_t tags[24];
++	int states[24];
++	uint32_t opts[24];
++	uintptr_t conts[24];
++	uint64_t evs[24];
++	uint64_t sysu[24], sysm[24], csw[24];
++	int n = 0, i;
++
++	if (task == NULL) {
++		return;
++	}
++
++	task_lock(task);
++	queue_iterate(&task->threads, th, thread_t, task_threads) {
++		if (n >= 24) {
++			break;
++		}
++		tids[n] = thread_tid(th);
++		tags[n] = thread_get_tag(th);
++		states[n] = th->state;
++		opts[n] = th->options;
++		conts[n] = (uintptr_t)th->continuation;
++		evs[n] = (uint64_t)th->wait_event;
++		sysu[n] = th->syscalls_unix;
++		sysm[n] = th->syscalls_mach;
++		csw[n] = th->c_switch;
++		n++;
++	}
++	task_unlock(task);
++
++	printf("crossxnu: threads(%s): pid=%d n=%d\n", where, proc_getpid(p), n);
++	for (i = 0; i < n; i++) {
++		/*
++		 * Kernel addresses are printed as two 32-bit halves: printf()
++		 * replaces any value that looks like a kernel pointer with
++		 * "<ptr>" when the output goes to a log.
++		 */
++		printf("crossxnu: threads(%s):  tid=%llu tag=0x%x state=0x%x opt=0x%x "
++		    "cont=%08x%08x ev=%08x%08x sys=%llu/%llu cs=%llu\n",
++		    where, (unsigned long long)tids[i], tags[i], states[i], opts[i],
++		    (unsigned)(conts[i] >> 32), (unsigned)conts[i],
++		    (unsigned)(evs[i] >> 32), (unsigned)evs[i],
++		    (unsigned long long)sysu[i], (unsigned long long)sysm[i],
++		    (unsigned long long)csw[i]);
++	}
++}

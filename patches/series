@@ -25,3 +25,4 @@
 0025-security-permissive-runtime.patch
 0026-crypto-without-corecrypto.patch
 0027-iokit-platform-glue.patch
+0028-bringup-tracing.patch
