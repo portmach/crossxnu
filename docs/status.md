@@ -287,3 +287,38 @@ tree — теперь `tsc_init()` предпочитает это значен�
 внутри kevent/workloop до постановки запроса — это и надо проверять
 следующим шагом (дамп количества pending-событий kqueue/workloop процесса
 из сторожевого таймера).
+
+### Проверка «отложенного продолжения» (вариант 2), 2026-10-30
+
+Гипотеза: после `logging initialized` launchd ждёт срабатывания таймера
+(`EVFILT_TIMER` в workloop, как это делают `dispatch_after`/`dispatch_source`
+таймеры), а таймеры не доставляются.
+
+Инструментировал `filt_timerarm()`/`filt_timerexpire()` в
+`bsd/kern/kern_event.c` (печать первых 20 arm/expire для pid 1).
+Результат прогона: **0 arm и 0 expire за 200 с**. То есть launchd вообще не
+пользуется kqueue-таймерами — гипотеза закрыта, инструментация откачена.
+
+Дополнительно по дизассемблеру `launchd.real` пройден весь хвост `main()`:
+после `launchd_log_init()` идут boot-таски `xpcroleaccountd`, `init_featureflags`,
+`EndpointSecurity`, `rc.server`, `tzinit`, `dirhelper`, `rootless-init`,
+`finish-demo-restore`, вызов `0x10004d8e4`, `systemstats`, `prng_seedctl`,
+создание `/var/run/utmpx`. Ни один из них не появляется в логе и не даёт
+syscall'ов, то есть последовательность останавливается на **первом же** таске
+после `log_init`.
+
+Остаются две версии, обе требуют проверки состояния libdispatch:
+
+1. Постановка в очередь main вязнет в poke-пути: в
+   `_dispatch_runloop_queue_wakeup()` при `DISPATCH_WAKEUP_MAKE_DIRTY` и
+   выставленном drain-lock выполняется `_dispatch_runloop_queue_poke()` —
+   отправка в runloop-порт (mach-порт main-очереди). Если получателя уже нет
+   (главный поток вышел), сообщение просто лежит в порту, а очередь не дренится.
+2. Запись работы в очередь была, но её не разбудили (потерянное пробуждение
+   в workqueue); тогда `req` был бы больше нуля, а он 0 — версия слабее.
+
+Следующий шаг: трассировать в ядре `mach_msg2_trap`/`ipc_kmsg` для pid 1 в
+момент остановки (кому и куда шлётся сообщение, есть ли у порта получатель),
+и/или прочитать из сторожевого таймера `__dispatch_main_q` (`dq_state`,
+`dq_items_tail`) через `copyin`, найдя базу libdispatch в адресном
+пространстве launchd.
