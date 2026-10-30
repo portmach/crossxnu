@@ -536,3 +536,27 @@ thread_resume(th);
 libpthread; упирается в четвёртую (порт в `pthread+0xf8`). Пока она не
 разобрана, функция возвращает `ENOTSUP`, чтобы ядро грузилось, — иначе pid 1
 умирает и система паникует.
+
+#### `bsdthread_create` работает: создавать поток нужно приостановленным
+
+Последняя проверка libpthread (`Unable to allocate thread port, possible port
+leak` на поле `pthread+0xf8`) оказалась **гонкой**, а не отсутствующим
+значением: `__pthread_start()` читает порт из структуры `_pthread` сразу после
+`thread_selfid()`, а ядро резюмировало поток прямо в `bsdthread_create()` —
+то есть до того, как `pthread_create()` в родителе успевал записать туда
+отданный порт.
+
+Теперь ядро собирает поток целиком (состояние с `rdi = pthread_t`,
+`r9 = 0x10000000`, `thread_set_tsd_base`, порт через `*retval`), но оставляет
+его **приостановленным** — запускает userland. После этого pid 1 выживает:
+
+```text
+crossxnu: bsdthread_create: suspended port=7939 threadstart=0x10a9ff820 stack=0x11d427000
+crossxnu: bsdthread_create: suspended port=2563 ...
+crossxnu: bsdthread_create: suspended port=2819 ...
+crossxnu: bsdthread_create: suspended port=7427 ...
+sh-3.2# /sbin/launchd.real; echo rc=$?
+```
+
+`launchd` по-прежнему упирается в `Root queue initialization failed`
+(libdispatch), но обычный `pthread_create()` теперь работает.
