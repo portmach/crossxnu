@@ -19,3 +19,7 @@
 [submodule "upstream/kc-tools"]
 	path = upstream/kc-tools
 	url = https://github.com/PureDarwin/kc-tools.git
+
+[submodule "upstream/hfs"]
+	path = upstream/hfs
+	url = https://github.com/apple-oss-distributions/hfs.git
