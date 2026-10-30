@@ -203,8 +203,49 @@ WRITE`, `DKIOCGETTHROTTLEMASK`, `DKIOCGETPHYSICALBLOCKSIZE`, `DKIOCISVIRTUAL`,
 Осталось: **mount свежесозданного тома падает в ядре** — trap (invalid opcode,
 `hfs_assert`) внутри `cat_create` при `hfs_mountfs`. Корневой том (собранный
 `xorrisofs`) монтируется нормально, а пустой том от `newfs_hfs` — нет.
-Похоже на ветку создания/чтения пустого catalog B-tree, которой в перенесённом
-коде HFS+ не хватает; это следующий конкретный шаг.
+### Почему падает mount пустого тома
+
+Точная локализация (символы по тому же ядру, что было в загрузке):
+
+```text
+panic: Kernel trap at 0xffffff8000931d1f, type = 6=invalid opcode
+  cat_create +0x26f
+  hfs_privatedir_init +0x2ad
+  hfs_MountHFSPlusVolume +0x17ce
+  hfs_mountfs +0xcfc
+  hfs_mount +0xd4
+  mount(2)
+```
+
+`hfs_privatedir_init()` создаёт служебный каталог «HFS+ Private Data» на
+свежем томе, вызывает `cat_create()`, а тот внутри инлайнит `buildrecord()`.
+В сгенерированном коде ветка «это каталог» заканчивается так:
+
+```text
+ffffff8000931cc1  cmpl $0x4000, %r14d        ; S_IFDIR
+ffffff8000931cc8  jne  0xffffff8000931d24    ; ветка файла
+ffffff8000931cca  … заполнение HFSPlusCatalogFolder …
+ffffff8000931d0a  movl $0x0, 0x44a(%rbx)
+ffffff8000931d14  movq $0x0, 0x47e(%rbx)
+ffffff8000931d1f  ud1l (%rax), %eax          ; <-- сюда приходит выполнение
+ffffff8000931d22  ud2
+```
+
+То есть после заполнения записи каталога управление **проваливается в
+`__builtin_unreachable()`-заглушку**, которую clang поставил после
+`panic()`-ветки (`hfs_warn`/`hfs_assert` в `hfs_dbg.h`). Никакого сообщения
+`hfs: …` перед паникой нет, значит ни один `hfs_assert` не сработал — это
+следствие оптимизации, а не проверка.
+
+Рабочие гипотезы, в порядке проверки:
+
+1. `-O2` + UB/aliasing в HFS+-коде (структуры `CatalogRecord`/`HFSPlusCatalogFolder`
+   пишутся через каст) → собрать `bsd/hfs` с `-fno-strict-aliasing` или `-O1`.
+2. Реальный пропущенный case: на пустом томе `hfs_privatedir_init` идёт по ветке,
+   которой в перенесённом коде не хватает (сравнить с `hfs-715.100.10`).
+3. `panic_on_assert`/`hfs_corruption_panics` инициализируются так, что ветка
+   `__builtin_unreachable()` достижима — проверить их значения на нашем ядре.
+
 
 ## Ограничения, которые видны сразу
 
