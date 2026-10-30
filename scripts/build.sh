@@ -96,6 +96,9 @@ CFLAGS_EXTRA_VALUE+=" -Wno-implicit-int-float-conversion"
 CFLAGS_EXTRA_VALUE+=" -Wno-vla"
 CFLAGS_EXTRA_VALUE+=" -Wno-gnu-folding-constant"
 CFLAGS_EXTRA_VALUE+=" -Wno-unused-private-field"
+# HFS+ is written with heavy struct punning (CatalogRecord / HFSPlus*); keep
+# the optimizer from exploiting strict aliasing in that C code.
+CFLAGS_EXTRA_VALUE+=" -fno-strict-aliasing"
 CFLAGS_EXTRA_VALUE+=" -Wno-error=cast-align -Wno-error=shorten-64-to-32"
 CFLAGS_EXTRA_VALUE+=" -Wno-error=implicit-int-conversion -Wno-error=implicit-function-declaration"
 CFLAGS_EXTRA_VALUE+=" -Wno-error=deprecated-non-prototype -Wno-error=incompatible-pointer-types"
