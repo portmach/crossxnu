@@ -627,3 +627,29 @@ RCX: 0x000000010e48b000        ; адрес только что выделенн
 выставить потоку пользовательское состояние (старт на `p->p_wqthread` с
 аргументами upcall'а) и разобраться с контрактом «не возвращаться» на местах
 вызова.
+#### `workq_setup_thread`: workqueue-поток доходит до userland
+
+Контракт хука — «не возвращаться» (XNU ставит `__builtin_unreachable()` сразу
+после вызова; с нашей заглушкой ядро падало в `ud2`). Вызов делается на потоке,
+который вот-вот уйдёт в userland, поэтому реализация такая:
+
+```c
+state.rip = proc_get_wqthread(p);   /* _start_wqthread */
+state.rsp = stackaddr;              /* стек из workq_create_threadstack */
+state.r9  = 0x10000000;
+thread_set_wq_state64(th, &state);
+thread_set_tsd_base(th, stackaddr);
+thread_exception_return();          /* не возвращается */
+```
+
+Результат — путь workqueue целиком проходит, ядро живо:
+
+```text
+crossxnu: workq_create_threadstack: addr=0x1118d6000 size=0x10000
+launchd.real cannot be run directly.
+crossxnu: workq_setup_thread: pid=9 wqthread=0x10c76380c stack=0x1118d6000 flags=0x1/0x4d4004
+sh-3.2# Abort trap: 6
+```
+
+`launchd` печатает своё `cannot be run directly` и делает `abort()` — потому что
+он pid 9, а не pid 1. Это и есть следующий шаг: запускать его из `init`.
