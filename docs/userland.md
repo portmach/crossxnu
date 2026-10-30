@@ -653,3 +653,31 @@ sh-3.2# Abort trap: 6
 
 `launchd` печатает своё `cannot be run directly` и делает `abort()` — потому что
 он pid 9, а не pid 1. Это и есть следующий шаг: запускать его из `init`.
+#### launchd как pid 1: «cannot be run directly»
+
+`userland/init.c` теперь умеет выбирать сценарий загрузки: если в образе есть
+`/etc/rc.launchd`, он запускается вместо `/etc/rc.local`. Сценарий делает
+`newfs_hfs` на `/dev/md1`, монтирует `/private/var`, создаёт каталоги и делает
+`exec /sbin/launchd.real` — так launchd наследует pid 1.
+
+Проверено в QEMU: всё это выполняется (`pid 2` — newfs, `pid 3` — mkdir,
+`pid 4` — mount), и launchd действительно становится pid 1:
+
+```text
+crossxnu: preparing /private/var
+crossxnu: starting launchd as pid 1
+pid 1 exited -- exit reason namespace 7 subcode 0x1,
+    description launchd.real cannot be run directly (stdout: 1)
+panic: initproc exited -- ... launchd.real cannot be run directly
+```
+
+То есть launchd **сам** отказывается стартовать: он печатает
+`launchd.real cannot be run directly` (обратите внимание — с именем файла) и
+выходит, из-за чего ядро паникует с `initproc exited`.
+
+Значит launchd проверяет не только `getpid() == 1` (мы это выполнили), а ещё
+какой-то признак «меня запустило ядро как init». В XNU строки `pid1_magic` нет,
+так что это, скорее всего, специальный аргумент exec/apple-строка, которую
+ядро подкладывает программе pid 1 (либо проверка имени файла `launchd`).
+Следующий шаг — найти эту проверку в launchd (по строке `cannot be run
+directly`) и дать ядру то, что она ожидает.

@@ -1,0 +1,21 @@
+#!/bin/sh
+# crossxnu: bring the machine up far enough for launchd to be pid 1.
+#
+# This script is run by the static init stub (which is /sbin/launchd on the
+# ramdisk) in the same process.  Everything here has to happen *before*
+# launchd: launchd requires a writable /private/var, and the only writable
+# filesystem we have is the scratch volume on /dev/md1 (a RAM disk the kernel
+# creates at boot).  The final exec replaces this shell, so launchd inherits
+# pid 1.
+
+echo "crossxnu: preparing /private/var"
+
+newfs_hfs -v scratch /dev/md1
+mkdir -p /private/var
+mount -t hfs /dev/md1 /private/var || echo "crossxnu: mount of /dev/md1 failed"
+
+mkdir -p /private/var/run /private/var/db /private/var/log /private/var/tmp
+mkdir -p /private/var/root /private/var/empty
+
+echo "crossxnu: starting launchd as pid 1"
+exec /sbin/launchd.real

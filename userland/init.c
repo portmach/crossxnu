@@ -58,10 +58,17 @@ sys_exit(int code)
 
 static const char console_path[] = "/dev/console";
 static const char shell_path[] = "/bin/sh";
-static const char rc_path[] = "/etc/rc.local";
+/*
+ * Two boot scripts: /etc/rc.local drops to an interactive shell (bring-up),
+ * /etc/rc.launchd prepares /private/var and execs the real launchd as pid 1.
+ * The stub picks the launchd one when it is present, so the ramdisk decides.
+ */
+static const char rc_interactive_path[] = "/etc/rc.local";
+static const char rc_launchd_path[] = "/etc/rc.launchd";
 static const char fail_msg[] = "crossxnu-init: cannot exec /bin/sh /etc/rc.local\n";
 
-static const char *const shell_argv[] = { shell_path, rc_path, 0 };
+static const char *const shell_argv[] = { shell_path, rc_interactive_path, 0 };
+static const char *const shell_argv_launchd[] = { shell_path, rc_launchd_path, 0 };
 static const char *const shell_envp[] = {
 	"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 	"HOME=/",
@@ -82,7 +89,14 @@ start(void)
 		}
 	}
 
-	long error = sys_execve(shell_path, shell_argv, shell_envp);
+	long error;
+
+	/* Prefer the launchd path when the ramdisk ships that script. */
+	if (sys_open(rc_launchd_path, 0 /* O_RDONLY */, 0) >= 0) {
+		error = sys_execve(shell_path, shell_argv_launchd, shell_envp);
+	} else {
+		error = sys_execve(shell_path, shell_argv, shell_envp);
+	}
 	sys_write(2, fail_msg, sizeof(fail_msg) - 1);
 	sys_exit((int)(-error) & 0x7f);
 }
