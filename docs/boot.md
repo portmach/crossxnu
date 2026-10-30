@@ -121,6 +121,26 @@ kext'ов в KC есть `__PRELINK_INFO` с пустым
 Следующий шаг — platform expert kext (ACPI): без него `IOPlatformExpert`
 не находит драйвер платформы и не строит root device.
 
+### Kext'ы в fileset
+
+`build-fileset.sh` умеет принимать реальные kext'ы и codeless KPI:
+
+```bash
+./scripts/build-fileset.sh --with-kpi \
+    --kext /path/AppleACPIPlatformExpert.kext \
+    --kext /path/IOACPIFamily.kext
+```
+
+`--with-kpi` добавляет `config/System.kext/PlugIns/*.kext` как codeless
+(с `CFBundleVersion=9999.0.0`: сырую версию `12377.121.6` OSKext
+отвергает). Это нужно, потому что реальные Apple-kext'ы объявляют
+`OSBundleLibraries` на `com.apple.kpi.*`.
+
+Без реального platform expert'а ядро падает на
+`Unable to find driver for this platform: "ACPI"` — это текущий блокер.
+Кексты Apple нужно взять из macOS-установки (BootKC/SystemKC или
+`/System/Library/Extensions`); в репозитории их нет.
+
 ## Bare-путь (экспериментально)
 
 Bare `MH_EXECUTE` доходит до того же места; патч 0013 и bare-вариант
