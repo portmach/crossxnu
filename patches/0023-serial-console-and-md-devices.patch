@@ -1,0 +1,310 @@
+--- a/bsd/dev/i386/cons.c
++++ b/bsd/dev/i386/cons.c
+@@ -104,10 +104,73 @@
+ int cnioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flg, proc_t p);
+ int cnselect(__unused dev_t dev, int flag, void * wql, proc_t p);
+ 
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++/*
++ * crossxnu: the x86 console path is the km driver (km_tty[0]), which the
++ * synthetic platform expert never registers because there is no PS/2/VGA
++ * platform behind it.  Back /dev/console directly with the serial UART so
++ * userland can read and write its console.
++ */
++static boolean_t
++crossxnu_serial_console(void)
++{
++	/*
++	 * kminit() always runs, so a km tty exists, but it is backed by the VGA
++	 * framebuffer and PS/2 keyboard.  With no display attached the serial
++	 * UART is the only console that goes anywhere, so always prefer it.
++	 */
++	return TRUE;
++}
++
++static int
++crossxnu_serial_read(struct uio *uio)
++{
++	int error = 0;
++	while (uio_resid(uio) != 0) {
++		int c = serial_getc();
++		if (c < 0) {
++			continue;
++		}
++		if (c == '\r') {
++			c = '\n';
++		}
++		if ((error = uiomove(&c, 1, uio)) != 0) {
++			break;
++		}
++		if (c == '\n') {
++			break;
++		}
++	}
++	return error;
++}
++
++static int
++crossxnu_serial_write(struct uio *uio)
++{
++	int error = 0;
++	char c = 0;
++	while (uio_resid(uio) != 0) {
++		if ((error = uiomove(&c, 1, uio)) != 0) {
++			break;
++		}
++		if (c == '\n') {
++			serial_putc('\r');
++		}
++		serial_putc(c);
++	}
++	return error;
++}
++#endif /* CROSSXNU_SECURITY_PERMISSIVE */
++
+ int
+ cnopen(__unused dev_t dev, int flag, int devtype, struct proc *pp)
+ {
+ 	int error;
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (crossxnu_serial_console()) {
++		return 0;
++	}
++#endif
+ 	struct tty *constty = copy_constty();
+ 	if (constty) {
+ 		dev = constty->t_dev;
+@@ -126,6 +189,11 @@
+ cnclose(__unused dev_t dev, int flag, int mode, struct proc *pp)
+ {
+ 	int error;
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (crossxnu_serial_console()) {
++		return 0;
++	}
++#endif
+ 	struct tty *constty = copy_constty();
+ 	if (constty) {
+ 		dev = constty->t_dev;
+@@ -144,6 +212,11 @@
+ cnread(__unused dev_t dev, struct uio *uio, int ioflag)
+ {
+ 	int error;
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (crossxnu_serial_console()) {
++		return crossxnu_serial_read(uio);
++	}
++#endif
+ 	struct tty *constty = copy_constty();
+ 	if (constty) {
+ 		dev = constty->t_dev;
+@@ -162,6 +235,11 @@
+ cnwrite(__unused dev_t dev, struct uio *uio, int ioflag)
+ {
+ 	int error;
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (crossxnu_serial_console()) {
++		return crossxnu_serial_write(uio);
++	}
++#endif
+ 	struct tty *constty = copy_constty();
+ 	if (constty) {
+ 		dev = constty->t_dev;
+@@ -180,6 +258,11 @@
+ cnioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
+ {
+ 	int error;
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (crossxnu_serial_console()) {
++		return ENOTTY;
++	}
++#endif
+ 	struct tty *constty = copy_constty();
+ 	if (constty) {
+ 		dev = constty->t_dev;
+--- a/bsd/dev/memdev.c
++++ b/bsd/dev/memdev.c
+@@ -418,6 +418,16 @@
+ 
+ 	case DKIOCSETBLOCKSIZE:
+ 		if (is_char) {
++			/*
++			 * crossxnu: newfs_hfs sets the block size on the raw character
++			 * device.  Honour it only for the I/O mapping; the volume header
++			 * keeps the 512-byte sector size.
++			 */
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++			if (*f >= DEV_BSIZE) {
++				break;
++			}
++#endif
+ 			return ENODEV;                                        /* We can only do this for a block */
+ 		}
+ 		if (*f < DEV_BSIZE) {
+@@ -444,6 +454,45 @@
+ 	 *   What is your base page?
+ 	 *   What is your size?
+ 	 */
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/*
++	 * crossxnu: disk-layer queries that newfs_hfs and mount_hfs issue
++	 * against a raw memory device.  Answer them with benign values.
++	 */
++	case DKIOCGETMAXBYTECOUNTREAD:
++	case DKIOCGETMAXBYTECOUNTWRITE:
++		*o = (u_int64_t)mdev[devid].mdSecsize * 32;
++		break;
++
++	case DKIOCGETTHROTTLEMASK:
++		*o = 0;
++		break;
++
++	case DKIOCISVIRTUAL:
++	case DKIOCGETFEATURES:
++		*f = 0;
++		break;
++
++	case DKIOCGETPHYSICALBLOCKSIZE:
++		*f = mdev[devid].mdSecsize;
++		break;
++
++	case DKIOCGETCOMMANDPOOLSIZE:
++		*f = 16;
++		break;
++
++	case DKIOCGETPROVISIONSTATUS:
++	case DKIOCCORESTORAGE:
++		/* struct-sized queries: hand back zeros */
++		memset(data, 0, 64);
++		break;
++
++	case DKIOCGETERRORDESCRIPTION:
++		/* dk_error_description_t */
++		memset(data, 0, 8);
++		break;
++#endif /* CROSSXNU_SECURITY_PERMISSIVE */
++
+ 	case DKIOCGETMEMDEVINFO:
+ 		if (!(mdev[devid].mdFlags & mdInited)) {
+ 			return ENXIO;
+@@ -455,6 +504,10 @@
+ 		break;
+ 
+ 	default:
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++		printf("mdevioctl: unsupported ioctl 0x%lx (char=%d)\n",
++		    (unsigned long)cmd, is_char);
++#endif
+ 		error = ENOTTY;
+ 		break;
+ 	}
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -887,7 +887,12 @@
+ 		int err;
+ 
+ 		bsd_init_kprintf("calling setconf\n");
+-		setconf();
++	
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	extern void hfs_kernel_init(void);
++	hfs_kernel_init();
++#endif
++	setconf();
+ #if CONFIG_NETBOOT
+ 		netboot = (mountroot == netboot_mountroot);
+ #endif
+@@ -1131,6 +1136,9 @@
+ 
+ 
+ #include <sys/disklabel.h>  /* for MAXPARTITIONS */
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++#include <pexpert/device_tree.h>
++#endif
+ 
+ static void
+ setconf(void)
+@@ -1138,6 +1146,44 @@
+ 	u_int32_t       flags;
+ 	kern_return_t   err;
+ 
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
++	extern dev_t mdevlookup(int devid);
++	dev_t md = (dev_t)-1;
++	uint64_t root_size = 0;
++	kernel_segment_command_t *rootseg = getsegbyname("__ROOTIMG");
++
++	if (rootseg != NULL && rootseg->filesize >= 512) {
++		md = mdevlookup(0);
++		if (md == (dev_t)-1)
++			md = mdevadd(0, (uint64_t)rootseg->vmaddr >> 12,
++			    (unsigned)(rootseg->filesize >> 12), 0);
++		root_size = rootseg->filesize;
++	} else {
++		DTEntry entry;
++		void *prop = NULL;
++		unsigned int prop_size = 0;
++		if (SecureDTLookupEntry(NULL, "/chosen/memory-map", &entry) == kSuccess &&
++		    SecureDTGetProperty(entry, "RAMDisk", &prop, &prop_size) == kSuccess &&
++		    prop != NULL && prop_size >= 2 * sizeof(uint64_t)) {
++			uint64_t paddr = ((const uint64_t *)prop)[0];
++			uint64_t length = ((const uint64_t *)prop)[1];
++			md = mdevlookup(0);
++			if (md == (dev_t)-1)
++				md = mdevadd(0, paddr >> 12,
++				    (unsigned)(length >> 12), 1);
++			root_size = length;
++		}
++	}
++	if (md != (dev_t)-1) {
++		rootdev = md;
++		strlcpy(rootdevice, "md0", sizeof(rootdevice));
++		flags = 0;
++		printf("crossxnu: root device md0 (%llu bytes)\n",
++		    (unsigned long long)root_size);
++		goto crossxnu_root_ready;
++	}
++#endif
+ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
+ 	if (err) {
+ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
+@@ -1147,6 +1193,38 @@
+ 		flags = 0;
+ 	}
+ 
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++crossxnu_root_ready:
++	{
++		/*
++		 * crossxnu: the root volume is packed to its last block, so it has
++		 * no room for /tmp or /var state.  Carve a scratch memory device out
++		 * of the kernel map; userland formats it with newfs_hfs and mounts it.
++		 */
++		vm_size_t scratch_size = (vm_size_t)(256ULL << 20);
++		vm_offset_t scratch = 0;
++		kern_return_t scratch_kr = KERN_FAILURE;
++
++		/* setconf can run more than once (image boot); only add md1 once. */
++		if (mdevlookup(1) != (dev_t)-1) {
++			goto crossxnu_scratch_done;
++		}
++		scratch_kr = kmem_alloc(kernel_map, &scratch, scratch_size,
++		    KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_SECURITY);
++
++		if (scratch_kr == KERN_SUCCESS && scratch != 0) {
++			if (mdevadd(1, (uint64_t)scratch >> 12,
++			    (unsigned)(scratch_size >> 12), 0) != (dev_t)-1) {
++				printf("crossxnu: scratch device md1 (%llu bytes)\n",
++				    (unsigned long long)scratch_size);
++			}
++		} else {
++			printf("crossxnu: cannot reserve md1 scratch device\n");
++		}
++crossxnu_scratch_done:
++		;
++	}
++#endif
+ #if CONFIG_NETBOOT
+ 	if (flags & 1) {
+ 		/* network device */

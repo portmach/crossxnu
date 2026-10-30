@@ -19,3 +19,9 @@
 0019-wait-max-cpus-stub.patch
 0020-commpage-updates-before-init.patch
 0021-aes-without-corecrypto.patch
+0022-hfs-filesystem-in-kernel.patch
+0023-serial-console-and-md-devices.patch
+0024-pthread-kext-replacement.patch
+0025-security-permissive-runtime.patch
+0026-crypto-without-corecrypto.patch
+0027-iokit-platform-glue.patch

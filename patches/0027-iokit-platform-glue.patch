@@ -1,0 +1,75 @@
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -1578,6 +1578,11 @@
+ 		return false;
+ 	}
+ 
++	#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return false;
++	}
++#endif
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementStringWithProc(
+ 		proc,
+ 		entitlement,
+@@ -1621,6 +1626,11 @@
+ 		return false;
+ 	}
+ 
++	#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return false;
++	}
++#endif
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementBooleanWithProc(
+ 		proc,
+ 		entitlement);
+@@ -1651,6 +1661,12 @@
+ 		return false;
+ 	}
+ 
++	#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return false;
++	}
++#endif
++
+ 	kern_return_t ret = amfi->OSEntitlements.copyEntitlementAsOSObjectWithProc(
+ 		proc,
+ 		entitlement,
+@@ -1701,6 +1717,12 @@
+ 		return NULL;
+ 	}
+ 
++	#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return NULL;
++	}
++#endif
++
+ 	kern_return_t ret = amfi->OSEntitlements.copyEntitlementAsOSObjectWithProc(
+ 		proc,
+ 		entitlement,
+@@ -1740,6 +1762,12 @@
+ 		return false;
+ 	}
+ 
++	#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	if (amfi == NULL) {
++		return false;
++	}
++#endif
++
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementBooleanWithProc(
+ 		proc,
+ 		entitlement);
+--- a/iokit/conf/files
++++ b/iokit/conf/files
+@@ -111,7 +111,6 @@
+ iokit/Tests/TestServices/TestIOUserClient2022Entitlements.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIOServiceUserNotification.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestIODataQueues.cpp optional iokitcpp
+-./Tests/TestServices/TestDextRematch.iig.cpp optional iokitcpp
+ iokit/Tests/TestServices/TestDextRematchKernel.cpp optional iokitcpp
+ 
+ iokit/Kernel/IOStatistics.cpp				optional iokitcpp

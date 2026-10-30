@@ -111,3 +111,20 @@ echo 0007-my-change.patch >> patches/series
 
 Не обновляйте тег «заодно» с другими изменениями: смешение версии и
 патчей делает diff с Apple-сборкой бессмысленным.
+
+### Bring-up серия 0022–0027
+
+Появилась после первых успешных загрузок: это то, что делает ядро пригодным
+для запуска настоящего userland на не-macOS железе. Проверено: `git checkout -- .`
+в сабмодуле `upstream/xnu` + `scripts/apply-patches.sh` (25 патчей) +
+`scripts/sync-hfs.sh` восстанавливают рабочее дерево **байт в байт**, и ядро
+собирается (размер совпадает; SHA-256 отличается только вшитой датой сборки).
+
+| Патч | Что делает |
+|:-----|:-----------|
+| `0022-hfs-filesystem-in-kernel.patch` | регистрирует HFS+ из `bsd/hfs` в `bsd/conf/files`, правки `vfs_subr.c` для root-mount |
+| `0023-serial-console-and-md-devices.patch` | serial-шим консоли, `md1` и дисковые ioctl в `memdev`, glue в `bsd_init.c` |
+| `0024-pthread-kext-replacement.patch` | встроенная таблица `pthread_functions` вместо `com.apple.kec.pthread`: `bsdthread_create/register/terminate`, workqueue-потоки с kevent-протоколом |
+| `0025-security-permissive-runtime.patch` | permissive-режим: пропуск signed blobs, отключение taint-проверки текстовых страниц, отчёт о user `#UD` |
+| `0026-crypto-without-corecrypto.patch` | md5/sha2 без corecrypto KEC (ранние вызовы до загрузки kext) |
+| `0027-iokit-platform-glue.patch` | glue `IOKitBSDInit` и `iokit/conf/files` для сборки без Xcode |

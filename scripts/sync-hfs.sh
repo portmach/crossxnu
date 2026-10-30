@@ -50,6 +50,12 @@ mkdir -p "${DEST}"
 install -D -m 644 "${HFS}/hfs_encodings/hfs_encodinghint.c" \
     "${DEST}/hfs_encodinghint.c"
 
+# The in-kernel build keeps the encodings sources next to bsd/hfs, because
+# bsd/hfs/hfs.h includes "../hfs_encodings/hfs_encodings.h".
+rm -rf "${CROSSXNU_XNU}/bsd/hfs_encodings"
+mkdir -p "${CROSSXNU_XNU}/bsd/hfs_encodings"
+cp -R "${HFS}/hfs_encodings/." "${CROSSXNU_XNU}/bsd/hfs_encodings/"
+
 # crossxnu glue (in-tree, MIT).
 cp -R "${PATCHES}/extra/." "${DEST}/"
 
