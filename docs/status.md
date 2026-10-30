@@ -7,7 +7,7 @@
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | recovery-userland работает: `bash`, `uname`, `sw_vers`, `ls`, `ps`, `mount`, `sysctl` на HFS+ root; launchd пока SIGILL, обычный root требует cryptex |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | recovery-userland работает: `bash`, `uname`, `sw_vers`, `ls`, `ps`, `mount`, `sysctl` на HFS+ root; свежий HFS+ том на `/dev/md1` монтируется и пишется; launchd пока SIGILL; обычный root требует cryptex |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -112,11 +112,14 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 
 ## 5. Ближайшие шаги
 
-1. Зарегистрировать serial-console в platform-stub'е (`/dev/console`), чтобы
-   получить интерактивный shell на recovery-userland.
+1. Запустить recovery-`launchd` как pid 1 с записываемым `/private/var`
+   (`md1` уже работает): `mkdir -p /private/var`, `mount -t hfs /dev/md1
+   /private/var`, затем `exec /sbin/launchd`. Для этого `userland/init.c`
+   должен готовить `/private/var` до `execve()`.
 2. Разобрать SIGILL в recovery-`launchd` (userland уже выполняется, см.
    [`userland.md`](userland.md)).
-3. Вынести правки ядра (pthread/AMFI guards) в `patches/`.
+3. Вынести правки ядра (pthread/AMFI guards, serial-шим, md1, дисковые ioctl,
+   `__nochk_bcopy` в HFS+) в `patches/`.
 4. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
    из asset'а; без неё обычный userland не запустится.
 5. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
@@ -149,3 +152,5 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | **Работает macOS userland**: `uname`, `sw_vers` (26.7.2/25G332), `ls`, `ps`, `mount`, `sysctl`, `cat` на HFS+ root; корень пока read-only |
 | 2026-10-30 | Корень монтируется rw, но том заполнен на 100% (`freeBlocks = 0`) → `ENOSPC`; добавлен scratch-том `md1` (256 MB) |
 | 2026-10-30 | `newfs_hfs` на `md1` работает после дисковых ioctl в `memdev`; монтирование свежего тома падает в `cat_create` |
+| 2026-10-30 | Причина трапа при mount свежего тома: `_FORTIFY_SOURCE_STRICT` проверяет `bcopy()` по размеру поля (`userInfo` = 16), clang сворачивал её в `ud2`; 4 копии Finder Info переведены на `__nochk_bcopy()` |
+| 2026-10-30 | **HFS+ пишется**: свежий том монтируется, `mkdir -p`, запись/чтение файла и `df` работают (`/dev/md1 on /private/var (hfs, local)`) |

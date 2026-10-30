@@ -61,6 +61,21 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0020 | `0020-commpage-updates-before-init.patch` | time-update commpage не трогают страницы до `commpage_populate()` | нет (только ранний boot) |
 | 0021 | `0021-aes-without-corecrypto.patch` | AES key wrappers возвращают ошибку без `g_crypto_funcs` (TFO при `dlil_init`) | нет (только путь без KEC) |
 
+### Что не покрыто серией: vendored-деревья
+
+`upstream/xnu/bsd/hfs/` — копия `upstream/hfs/core` (HFS+ не входит в состав
+XNU), поэтому её правки не видны в `git -C upstream/xnu diff` и не попадают в
+`patches/`. Всё, что там меняется, перечисляется здесь:
+
+- `hfs_catalog.c`: четыре копии Finder Info (по 32 байта) переведены с
+  `bcopy()` на `__nochk_bcopy()` — иначе `_FORTIFY_SOURCE_STRICT` сворачивает
+  проверку «32 > 16» в безусловный `ud2` и создание каталога паникует; разбор —
+  в [`hfs.md`](hfs.md#запись-на-свежий-том-fortify_source_strict-и-cat_create).
+
+Скрипт, который воспроизводимо раскладывает `upstream/hfs/core` в
+`upstream/xnu/bsd/hfs` (вместе с ручными шимами), пока не написан — это в
+списке ближайших шагов в [`status.md`](status.md).
+
 ### Патчи kc-tools
 
 `patches/kc-tools/*.patch` применяются `scripts/build-kc-tools.sh` к копии submodule в `build/kc-tools-src`, поэтому закреплённый коммит PureDarwin остаётся чистым. Сейчас там один патч: всегда собирать prelink-слой, чтобы `__PRELINK_INFO` существовал даже для KC без kext'ов — иначе XNU уходит в `readBooterExtensions()` и остаётся без kext summary.
