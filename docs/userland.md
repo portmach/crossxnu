@@ -382,3 +382,56 @@ offset=0x904f  page_off=0x4f  usr/lib/system/libsystem_pthread.dylib
 `proc_get_threadstart`, `pthread_callbacks`, waitq/turnstile-код), но
 `bsdthread_create` и `psynch_*` — это и есть тело закрытого kext'а, поэтому
 это отдельная задача, а не односимвольная правка.
+
+### Встроенная таблица `pthread_functions`
+
+`com.apple.kec.pthread` в синтетическом kernel collection отсутствует, но
+половина интерфейса уже есть в `bsd/pthread/pthread_shims.c` (шим'ы системных
+вызовов и таблица `pthread_callbacks`). Поэтому таблицу `pthread_functions`
+теперь собирает само ядро — `crossxnu_pthread_functions` в
+`pthread_shims.c`; она ставится статически:
+
+```c
+SECURITY_READ_ONLY_LATE(pthread_functions_t) pthread_functions =
+	&crossxnu_pthread_functions;      /* было NULL */
+```
+
+Важно: присваивать её в рантайме нельзя — `SECURITY_READ_ONLY_LATE` уже
+защищён к моменту `pthread_init()`, и запись даёт page fault в
+`_pthread_init+0xb`.
+
+Что реализовано по-настоящему:
+
+- `bsdthread_register` / `bsdthread_register2` — сохраняют `threadstart`,
+  `wqthread`, `pthsize`, `stack_addr_hint`, TSD-смещения и
+  `dispatchqueue_offset` в `proc`;
+- `thread_selfid` — `thread_tid(current_thread())`;
+- `pth_proc_hashinit/hashdelete`, `bsdthread_terminate`,
+  `pthread_find_owner`, `pthread_get_thread_kwq`, `workq_setup_thread`,
+  `workq_markfree_threadstack` — пустые заглушки.
+
+Заглушки с сообщением (пока не реализованы): `bsdthread_create`, 11
+`psynch_*`, `workq_handle_stack_events`, `workq_create_threadstack`,
+`workq_destroy_threadstack`.
+
+Отдельное открытие: **возвращаемое значение `bsdthread_register[_2]` — не код
+ошибки, а битовая маска возможностей.** Если вернуть 0, libpthread считает
+себя неинициализированным, и первый же `__pthread_workqueue_supported()`
+делает `trap` со строкой `BUG IN LIBPTHREAD: libpthread has not been
+initialized`. libpthread требует как минимум `0x4000001e`, а libdispatch —
+ещё и бит поддержки kevent-workqueue (`Missing Kevent WORKQ support`), поэтому
+сейчас маска — `0x7fffffff`; разбирать её по битам предстоит по мере того, как
+станут известны определения `PTHREAD_FEATURE_*`.
+
+После этого `launchd` ушёл дальше: trap в libpthread исчез, и следующая
+остановка — уже в libdispatch:
+
+```text
+crossxnu: bsdthread_register2 pid 9 threadstart 0x10ddb1820 ...
+crossxnu: user #UD rip=0x10b884d74 page_off=0xd74 insn=0f 0b 65 48 8b 04 25 ...
+```
+
+Это `__dispatch_root_queues_init_once.cold.3` в `libdispatch.dylib`
+(смещение `0x32d74`) со строкой
+`BUG IN LIBDISPATCH: Unable to limit cooperative pool size` — то есть
+следующий шаг упирается в настройку cooperative pool, а значит в `workq_*`.
