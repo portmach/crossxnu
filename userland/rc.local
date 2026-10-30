@@ -1,22 +1,10 @@
-echo "=== crossxnu: macOS userland on a non-macOS kernel ==="
+echo "=== crossxnu userland ==="
 uname -a
 sw_vers
-echo
-echo "--- root volume ---"
-ls -l /
-echo
-echo "--- /System/Library/CoreServices ---"
-ls /System/Library/CoreServices
-echo
-echo "--- processes ---"
-ps -A
-echo
-echo "--- mounts ---"
 mount
+echo "--- devices ---"
+ls -l /dev/md*
 echo
-echo "--- sysctl ---"
-sysctl kern.ostype kern.osversion kern.version
+echo "dropping to an interactive shell; type commands, exit to leave"
 echo
-echo "--- writable root? ---"
-echo hello > /tmp/crossxnu.txt && cat /tmp/crossxnu.txt
-echo "=== done ==="
+exec /bin/sh -i

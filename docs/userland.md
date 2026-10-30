@@ -111,6 +111,63 @@ stderr тоже закрыт. Статический stub (`userland/init.c`, 8.
 `Failed to exec /bin/bash as variant for /bin/sh (2: No such file or directory)`
 и выходит с кодом 1. Поэтому в образ нужно положить оба файла.
 
+## Интерактивная консоль
+
+`/dev/console` в гостя — это serial UART, поэтому интерактив зависит только от
+того, как QEMU подключён к порту:
+
+| `-serial` | что получается |
+|:----------|:---------------|
+| `file:build/serial.log` | односторонний лог, ввод недоступен |
+| `stdio` | ваш терминал = консоль гостя, можно печатать команды |
+| `tcp:127.0.0.1:4555,server=on,wait=off` | можно подключиться `nc`/скриптом |
+
+Быстрый способ:
+
+```powershell
+pwsh -File scripts/run-console.ps1
+```
+
+Скрипт поднимает QEMU с `-serial stdio`; через ~50 секунд появляется
+приглашение. `/etc/rc.local` в образе печатает короткий отчёт и делает
+`exec /bin/sh -i`.
+
+Проверенный сеанс:
+
+```text
+sh-3.2# echo INTERACTIVE-OK
+INTERACTIVE-OK
+sh-3.2# ls /
+System  bin  dev  etc  mnt1  mnt2 … private  sbin  tmp  usr  var
+sh-3.2# ps -A
+  PID TTY           TIME CMD
+    1 ??        20:07.29 /bin/sh -i
+    7 ??         2:15.24 ps -A
+sh-3.2# cat /System/Library/CoreServices/SystemVersion.plist
+… <string>26.7.2</string> …
+sh-3.2# echo typed-by-user
+typed-by-user
+```
+
+Что попробовать:
+
+```sh
+uname -a
+sw_vers
+ls -l /
+mount
+ps -A
+sysctl kern.ostype
+cat /System/Library/CoreServices/SystemVersion.plist
+echo hi > /tmp/x        # ENOSPC: том заполнен, см. ниже
+exit                    # pid 1 выходит -> kernel panic "initproc exited"
+```
+
+Ограничения сеанса: нет управления размером терминала и ANSI-редактирования
+(serial без tty), `exit` роняет ядро (потому что init — это и есть шелл),
+корень доступен только на чтение (том заполнен), `uname` ругается на
+отсутствующий `hw.machine`.
+
 ## Записываемый root и scratch-том
 
 Корень монтируется read-only жёстко: `vfs_rootmountalloc_internal()` ставит
