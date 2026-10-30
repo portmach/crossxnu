@@ -1,9 +1,10 @@
 # Boot в QEMU (phase 1)
 
 **Статус:** ядро линкуется, грузится в QEMU, проходит kalloc, kext scan,
-PRNG, `vm_map_store`, IOKit, BSD init и сеть. Оно доходит до
-`Still waiting for root device` — без storage/APFS kext'ов root не
-монтируется. Полной загрузки нет, но ядро живое и крутит VFS-wait.
+PRNG, `vm_map_store`, IOKit, BSD init и сеть. HFS+ теперь встроен в ядро
+(`upstream/hfs`), `memdev` отдаёт `__ROOTIMG` как `/dev/md0`, HFS+ root
+монтируется, стартует pid 1 (`init`). Следующий блокер — запуск реального
+`launchd`/прав/entitlements.
 
 ## Схема
 

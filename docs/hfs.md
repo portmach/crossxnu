@@ -68,3 +68,22 @@ symlink/права сохраняются. Если нет — есть `hfsprog
   проверить symlink/uid/gid.
 - Recovery-userland может требовать APFS-специфику; тогда HFS+ root
   подойдёт только для минимального shell/launchd-теста.
+
+## Результат
+
+HFS+ собран в ядро (38 `.c` из `upstream/hfs/core`), `vfs_fsadd()`
+вызывается из `setconf()`. `__ROOTIMG` добавляется в `kernel.kc`
+скриптом `scripts/kc-add-rootimg.py`, `mdevadd()` создаёт `/dev/md0`,
+rootdev выставляется на него. Тестовый HFS+ образ монтируется:
+
+```text
+crossxnu: built-in HFS+ registered
+Added memory device md0/rmd0 ...
+crossxnu: root device md0 (331776 bytes)
+hfs: mounted ISOIMAGE on device b(1, 0)
+vm: initializing swap
+```
+
+Дальше создаётся pid 1 (`init`) и ядро падает в
+`IOCurrentTaskHasEntitlement` — нужен настоящий recovery-root с
+`/sbin/launchd` и разбор прав/entitlements.
