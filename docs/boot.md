@@ -1,7 +1,8 @@
 # Boot в QEMU (phase 1)
 
-**Статус:** ядро доходит до ранней инициализации, но пока падает в
-`kalloc_type_distribute_budget()` (divide error). Полной загрузки нет.
+**Статус:** ядро линкуется, грузится в QEMU и проходит kalloc, kext scan,
+PRNG и `vm_map_store`. Сейчас оно падает в `IOPlatformExpert`: нет
+platform expert kext'а для ACPI. Полной загрузки нет.
 
 ## Схема
 
@@ -71,11 +72,29 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
   - SSE-инструкции до `fpu_init` → патч 0012 (CR4.OSFXSR в `start.s`);
   - x86 bare kernel определяется как `KCFormatDynamic` → патч 0013
     (для bare `MH_EXECUTE` считаем `KCFormatStatic`).
-- После этого ядро доходит до `kalloc_type_distribute_budget()` и делит
-  на ноль: статический разбор `__kalloc_type` не даёт ни одного view
-  (`total_sig == 0`). Патч 0014 берёт границы секции из Mach-O header
-  (`_mh_execute_header` для bare kernel), но деление всё ещё
-  воспроизводится — значит, проблема не только в boundary symbols.
+- Патч 0014 (границы `__kalloc_type` из Mach-O headers + zero-zone
+  guards) — kalloc проходит.
+- Патч 0013 (`bare MH_EXECUTE` → `KCFormatStatic`) нужен только для
+  bare-пути.
+- Патч 0015: `read_random()` использует early DRBG, пока corecrypto
+  KEC не загружен (иначе `prng_funcs.refresh(NULL)`).
+- Патч 0016: `vm_map_store_crypto_init()` не трогает
+  `crypto_random_kmem_ctx_size()` без `g_crypto_funcs`, а fallback в
+  `vmgo_chunk_select_random_slot()` идёт через `kmem_get_random16()`.
+- Дальше ядро доходит до IOKit и падает:
+
+```text
+Unable to find driver for this platform: "ACPI". @IOPlatformExpert.cpp:2365
+```
+
+Это не «kext scan»: в логе выше видно, что startup-фаза дошла до
+`IOPlatformExpert`, а драйвер платформы (`AppleACPIPlatformExpert`) —
+kext, которого в KC нет.
+
+Полезно: серийный лог снимается boot-аргументом `serial=1` и
+`-serial file:build/serial.log`. Без него panic screen прокручивает
+причину вверх, и видна только строка символайзера
+`can't perform kext scan: no kext summary`.
 
 ## Fileset-путь
 
@@ -89,19 +108,21 @@ qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
 `kc-builder` делает `MH_FILESET` с флагом `MH_DYLIB_IN_CACHE`;
 загрузчик это уже понимает (`KC_hdrs_vaddr`).
 
-После патча 0014 (section bounds + zero-denominator guards) kalloc
-**проходит**. Теперь ядро доходит до kext scan и паникует:
+`kc-builder` теперь **всегда** собирает prelink-слой: даже при нуле
+kext'ов в KC есть `__PRELINK_INFO` с пустым
+`_PrelinkInfoDictionary`. Это заставляет XNU идти по prelinked-пути, а
+не читать mkext из `/chosen/memory-map` (которого UEFI-загрузчик не
+создаёт). Патч лежит в `patches/kc-tools/` и применяется
+`scripts/build-kc-tools.sh` к копии submodule.
 
-```text
-can't perform kext scan: no kext summary
-```
+`WARNING: did not find UUID in Primary KC!` — ожидаемо: synthetic KC
+пока без `_PrelinkKernel`/KernelCache UUID.
 
-Это ожидаемо для пустого fileset: в KC нет ни одного kext’а и нет
-`__PRELINK_INFO`/kext summary. Следующий шаг — добавить минимальные
-kext’ы (или валидный codeless summary) в `kc-builder`.
+Следующий шаг — platform expert kext (ACPI): без него `IOPlatformExpert`
+не находит драйвер платформы и не строит root device.
 
 ## Bare-путь (экспериментально)
 
-Bare `MH_EXECUTE` доходит до того же места; патчи 0013/0014/0015 —
-временные обходы, не ABI-путь. Не использовать как основу для
-полного userland.
+Bare `MH_EXECUTE` доходит до того же места; патч 0013 и bare-вариант
+границ секций в 0014 — временные обходы, не ABI-путь. Не использовать
+как основу для полного userland.

@@ -1,0 +1,56 @@
+diff --git a/lib/prelink.c b/lib/prelink.c
+index bb97824..0d14fa5 100644
+--- a/lib/prelink.c
++++ b/lib/prelink.c
+@@ -51,7 +51,20 @@ int prelink_assemble(const uint8_t *kernel_data, size_t kernel_size,
+ 
+   // VMaddrs were already assigned by the caller (main.c).
+   // Compute __PRELINK_TEXT extent from the kexts' actual load_vmaddrs.
+-  uint64_t prelink_text_vmaddr = kexts[0].load_vmaddr;
++  //
++  // A kernel-only collection (no kexts, or only codeless kexts) still needs a
++  // non-empty __PRELINK_INFO: XNU's readStartupExtensions() only takes the
++  // prelinked path when that section has a size, and OSKext wants the
++  // _PrelinkInfoDictionary even when the array is empty.  Codeless kexts have
++  // no load address, so in that case the prelink payload starts at the end of
++  // the kernel image.
++  uint64_t prelink_text_vmaddr = kernel_vm_end;
++  for (size_t i = 0; i < num_kexts; i++) {
++    if (!kexts[i].codeless) {
++      prelink_text_vmaddr = kexts[i].load_vmaddr;
++      break;
++    }
++  }
+   uint64_t kext_end = prelink_text_vmaddr;
+   for (size_t i = 0; i < num_kexts; i++) {
+     if (kexts[i].codeless) continue;   // no code to place
+diff --git a/src/fileset.c b/src/fileset.c
+index 866a447..709743c 100644
+--- a/src/fileset.c
++++ b/src/fileset.c
+@@ -337,14 +337,18 @@ int fileset_assemble(const uint8_t *kernel_data, size_t kernel_size,
+   uint8_t *base_data = (uint8_t *)kernel_data;
+   size_t   base_size = kernel_size;
+   int      base_owned = 0;
+-  if (num_kexts > 0) {
+-    if (prelink_assemble(kernel_data, kernel_size, kexts, num_kexts,
+-                         &base_data, &base_size) != 0) {
+-      fprintf(stderr, "fileset: prelink_assemble failed\n");
+-      return -1;
+-    }
+-    base_owned = 1;
++  /* Always build the classic prelink layer, even for a kernel-only (or
++   * codeless-only) collection.  XNU's readStartupExtensions() treats a
++   * zero-sized __PRELINK_INFO as "not prelinked" and falls back to reading
++   * an mkext from the booter memory map, which a UEFI loader does not
++   * provide.  prelink_assemble() already emits an empty
++   * _PrelinkInfoDictionary for zero kexts, so this does not add code. */
++  if (prelink_assemble(kernel_data, kernel_size, kexts, num_kexts,
++                       &base_data, &base_size) != 0) {
++    fprintf(stderr, "fileset: prelink_assemble failed\n");
++    return -1;
+   }
++  base_owned = 1;
+ 
+   const struct mach_header_64 *mh = (const struct mach_header_64 *)base_data;
+   /* The collection-layout rewrites below (republishing the prelink payload as

@@ -52,6 +52,13 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0011 | `0011-tsc-zero-granularity.patch` | QEMU CPUID.0x15 denominator=0 / flex ratio=0 | низкий: timing |
 | 0012 | `0012-early-sse-enable.patch` | включить CR4.OSFXSR до C-кода | нет |
 | 0013 | `0013-x86-bare-kc-static.patch` | bare `MH_EXECUTE` считать `KCFormatStatic` | средний: KC |
+| 0014 | `0014-kalloc-static-section-bounds.patch` | границы `__kalloc_type`-секций через Mach-O headers; fileset top-level; zero-zone guards | **да, kalloc**: без type-зон бюджет не распределяется |
+| 0015 | `0015-read-random-early-fallback.patch` | `read_random` использует early DRBG, пока corecrypto KEC не загружен | нет (только путь без KEC) |
+| 0016 | `0016-vm-map-store-no-corecrypto.patch` | не инициализировать per-CPU kmem RNG без `g_crypto_funcs`; fallback на `kmem_get_random16` | нет (только путь без corecrypto KEC) |
+
+### Патчи kc-tools
+
+`patches/kc-tools/*.patch` применяются `scripts/build-kc-tools.sh` к копии submodule в `build/kc-tools-src`, поэтому закреплённый коммит PureDarwin остаётся чистым. Сейчас там один патч: всегда собирать prelink-слой, чтобы `__PRELINK_INFO` существовал даже для KC без kext'ов — иначе XNU уходит в `readBooterExtensions()` и остаётся без kext summary.
 
 ## 4. Как добавить патч
 

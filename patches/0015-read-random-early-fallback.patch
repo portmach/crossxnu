@@ -1,0 +1,22 @@
+diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
+index 504b3fa..1de92bb 100644
+--- a/osfmk/prng/prng_random.c
++++ b/osfmk/prng/prng_random.c
+@@ -370,6 +370,17 @@ random_cpu_init(int cpu)
+ __mockable void
+ read_random(void * buffer, u_int numbytes)
+ {
++	if (__improbable(!prng_ready)) {
++		/*
++		 * The kernel PRNG is installed by the corecrypto kext
++		 * (com.apple.kec.corecrypto).  A kernel collection without that
++		 * KEC reaches lockdown before register_and_init_prng() runs, so
++		 * the prng_funcs table is still zero.  Use the early boot DRBG
++		 * instead of calling through a NULL function pointer.
++		 */
++		read_erandom(buffer, numbytes);
++		return;
++	}
+ 	prng_funcs.refresh(prng_ctx);
+ 	read_random_generate(buffer, numbytes);
+ }

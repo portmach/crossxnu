@@ -15,6 +15,15 @@ OUT="${CROSSXNU_BUILD}/kc-tools"
 rm -rf "${WORK}"
 mkdir -p "${WORK}"
 cp -a "${SRC}/." "${WORK}/"
+
+# Apply crossxnu fixups to the copy, not the pinned PureDarwin submodule.
+shopt -s nullglob
+for patch_file in "${CROSSXNU_ROOT}"/patches/kc-tools/*.patch; do
+    echo "applying kc-tools patch: $(basename "${patch_file}")"
+    patch -p1 -d "${WORK}" -i "${patch_file}"
+done
+shopt -u nullglob
+
 cmake -S "${WORK}" -B "${WORK}/build" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${WORK}/build" -j"$(nproc)"
 

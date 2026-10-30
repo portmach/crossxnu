@@ -1,0 +1,39 @@
+diff --git a/osfmk/vm/vm_map_store.c b/osfmk/vm/vm_map_store.c
+index a55d833..62da355 100644
+--- a/osfmk/vm/vm_map_store.c
++++ b/osfmk/vm/vm_map_store.c
+@@ -36,6 +36,7 @@
+ #include <vm/vm_kern_internal.h>
+ #include <vm/vm_map_lock_internal.h>
+ #include <libkern/crypto/rand.h>
++#include <libkern/crypto/crypto_internal.h>
+ #if __arm64__
+ #include <arm_neon.h>
+ #define VMS_USE_NEON            1
+@@ -715,6 +716,16 @@ __startup_func
+ static void
+ vm_map_store_crypto_init(void)
+ {
++	/*
++	 * The corecrypto kext (com.apple.kec.corecrypto) installs
++	 * g_crypto_funcs.  A kernel collection without that KEC has no
++	 * per-cpu kmem RNG; vmgo_chunk_select_random_slot() then falls back
++	 * to the early boot RNG.
++	 */
++	if (g_crypto_funcs == NULL) {
++		return;
++	}
++
+ 	vm_size_t ctx_size = crypto_random_kmem_ctx_size();
+ 
+ 	ks_rng_ctx = zalloc_percpu_permanent(ctx_size, ZALIGN_PTR);
+@@ -1111,7 +1122,8 @@ vmgo_chunk_select_random_slot(vm_guard_object_chunk_t chunk)
+ 
+ 	assert(free > 0 && __builtin_popcountll(bitmap) == free);
+ 
+-	if (__improbable(startup_phase < STARTUP_SUB_EARLY_BOOT)) {
++	if (__improbable(startup_phase < STARTUP_SUB_EARLY_BOOT) ||
++	    ks_rng_ctx == NULL) {
+ 		n = kmem_get_random16((uint16_t)free - 1);
+ 	} else {
+ 		disable_preemption();

@@ -1,13 +1,13 @@
 # Статус сборки
 
-> Обновлено: 2026-10-29. Всё, что здесь написано, проверялось на
+> Обновлено: 2026-10-30. Всё, что здесь написано, проверялось на
 > Arch Linux x86_64 в WSL2, clang 23.1.4, XNU `xnu-12377.121.6`.
 
 ## 1. Матрица
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | компиляция объектов идёт; линковка не завершена |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | сборка и линковка идут; ядро грузится в QEMU до IOKit/ACPI |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -19,8 +19,10 @@ security-модель macOS: подпись/доверие/entitlements не enf
 осознанное решение, а не «пока не заметили». См. [`../SECURITY.md`](../SECURITY.md)
 и [`security-policy.md`](security-policy.md).
 
-Пока ядро не линкуется и не грузится, permissive-режим — **заявленный
-профиль**, а не проверенная runtime-функция.
+Ядро уже линкуется и грузится, и выводит
+`crossxnu: permissive code-signing profile enabled`. Runtime-проверка
+enforcement (TrustCache, подпись, entitlements) ещё впереди: пока это
+заявленный профиль, а не проверенная security-модель.
 
 Патч `0007-security-permissive-profile.patch` уже добавляет
 compile-time профиль `CROSSXNU_SECURITY_PERMISSIVE=1`:
@@ -68,14 +70,18 @@ build/mig/mig -cc toolchain/bin/clang \
       `-fapple-kext`, `-fno-rtti`, `-fno-exceptions`).
 - [x] cctools-port `ld64` линкует `kernel`:
       `MH_EXECUTE`, `NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`.
+- [x] `kalloc`, kext scan, PRNG и `vm_map_store` проходят; полный лог —
+      [`boot.md`](boot.md).
+- [x] `kc-builder` всегда генерирует `__PRELINK_INFO`, даже для KC без
+      kext'ов (патч `patches/kc-tools/`).
+- [ ] Следующий блокер — нет platform expert kext'а (`ACPI`), см. §3.
 - [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
-- [ ] kalloc пройден; ядро падает на `can't perform kext scan: no kext summary`; см. [`boot.md`](boot.md).
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `can’t perform kext scan: no kext summary` | добавить минимальные kext’ы/codeless summary в fileset | **высокий** |
+| 1 | `Unable to find driver for this platform: "ACPI"` | подключить `AppleACPIPlatformExpert`/`IOACPIFamily` или собрать stub platform expert | **высокий**: без него нет root device и CPU enumeration |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
@@ -118,3 +124,5 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-29 | DriverKit сгенерирован `iig-port`; aliases/`libcc_kext` закрыты; `ld64.lld` дал `DYLDLINK`/нулевой base |
 | 2026-10-29 | cctools-port `ld64` 956.6: `kernel` — `MH_EXECUTE NOUNDEFS PIE`, `__TEXT=0xffffff8000200000`; LTO пока off |
 | 2026-10-29 | UEFI xnu-loader: kernel стартует в QEMU (Skylake-Client); исправлены TSC/SSE/bare-KC; дальше divide в `kalloc_type_distribute_budget` |
+| 2026-10-30 | kalloc проходит; `__PRELINK_INFO` генерируется всегда; `read_random` и `vm_map_store` получили fallback без corecrypto KEC |
+| 2026-10-30 | Ядро доходит до `IOPlatformExpert`; panic: `Unable to find driver for this platform: "ACPI"` — нужен platform expert kext |
