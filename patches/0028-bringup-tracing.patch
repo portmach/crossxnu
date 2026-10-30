@@ -195,10 +195,10 @@ index b306145..143e29e 100644
  	DEBUG_KPRINT_SYSCALL_MACH(
  		"mach_call_munger64: code=%d(%s)\n",
 diff --git a/osfmk/kern/bsd_kern.c b/osfmk/kern/bsd_kern.c
-index 70bdafc..571ef00 100644
+index 70bdafc..1f4592a 100644
 --- a/osfmk/kern/bsd_kern.c
 +++ b/osfmk/kern/bsd_kern.c
-@@ -1519,3 +1519,65 @@ kern_return_for_errno(int bsd_errno)
+@@ -1519,3 +1519,165 @@ kern_return_for_errno(int bsd_errno)
  		return KERN_FAILURE;
  	}
  }
@@ -262,5 +262,105 @@ index 70bdafc..571ef00 100644
 +		    (unsigned)(evs[i] >> 32), (unsigned)evs[i],
 +		    (unsigned long long)sysu[i], (unsigned long long)sysm[i],
 +		    (unsigned long long)csw[i]);
++	}
++}
++
++/*
++ * crossxnu: temporary bring-up diagnostic.
++ *
++ * Locates libdispatch in a process by scanning its executable mappings for a
++ * known string, then dumps the main queue object (__dispatch_main_q) so we can
++ * tell whether the queue has pending items (a non-null tail) and in which
++ * state it is, i.e. whether launchd really has nothing to do or whether a
++ * queued item is stuck.
++ */
++extern kern_return_t copyinmap(vm_map_t map, vm_map_offset_t fromaddr,
++    void *todata, vm_size_t length);
++
++void crossxnu_dispatch_dump(struct proc *p, const char *where);
++
++void
++crossxnu_dispatch_dump(struct proc *p, const char *where)
++{
++	static const char needle[] =
++	    "BUG IN CLIENT OF LIBDISPATCH: dispatch_main() must be called on the main thread";
++	/* file/vm offsets in the libdispatch.dylib of this build */
++	const uint64_t needle_off = 0x3abaa;
++	const uint64_t mainq_off = 0x5fe40;
++	task_t task = proc_task(p);
++	vm_map_t map;
++	vm_map_entry_t entry;
++	uint64_t found = 0, base, scanned = 0;
++	char page[4096];
++	uint64_t q[32];
++	size_t i;
++
++	if (task == NULL) {
++		return;
++	}
++	map = get_task_map(task);
++	if (map == NULL) {
++		return;
++	}
++
++	/* no map lock: dump-only, the process is idle */
++	entry = vm_map_first_entry(map);
++	while (entry != vm_map_to_entry(map)) {
++		vm_map_offset_t start, end;
++
++		if (entry->is_sub_map || !(entry->protection & VM_PROT_EXECUTE)) {
++			entry = entry->vme_next;
++			continue;
++		}
++		start = entry->vme_start;
++		end = entry->vme_end;
++		if (end - start > 512ULL * 1024 * 1024) {
++			end = start + 512ULL * 1024 * 1024;
++		}
++		for (; start < end; start += sizeof(page)) {
++			if (scanned > 1024ULL * 1024 * 1024) {
++				break;
++			}
++			scanned += sizeof(page);
++			if (copyinmap(map, start, page, sizeof(page)) != KERN_SUCCESS) {
++				continue;
++			}
++			for (i = 0; i + sizeof(needle) <= sizeof(page); i++) {
++				if (page[i] == 'B' &&
++				    memcmp(page + i, needle, sizeof(needle)) == 0) {
++					found = start + i;
++					break;
++				}
++			}
++			if (found != 0) {
++				break;
++			}
++		}
++		if (found != 0) {
++			break;
++		}
++		entry = entry->vme_next;
++	}
++
++	if (found == 0) {
++		printf("crossxnu: dispatch(%s): libdispatch not found (scanned %llu MB)\n",
++		    where, (unsigned long long)(scanned >> 20));
++		return;
++	}
++	base = found - needle_off;
++	printf("crossxnu: dispatch(%s): libdispatch base=0x%08x%08x\n", where,
++	    (unsigned)(base >> 32), (unsigned)base);
++
++	if (copyinmap(map, base + mainq_off, q, sizeof(q)) != KERN_SUCCESS) {
++		printf("crossxnu: dispatch(%s): cannot read __dispatch_main_q\n", where);
++		return;
++	}
++	for (i = 0; i < sizeof(q) / sizeof(q[0]); i += 4) {
++		printf("crossxnu: dispatch(%s): q+0x%03llx = %08x%08x %08x%08x "
++		    "%08x%08x %08x%08x\n", where, (unsigned long long)(i * 8),
++		    (unsigned)(q[i] >> 32), (unsigned)q[i],
++		    (unsigned)(q[i + 1] >> 32), (unsigned)q[i + 1],
++		    (unsigned)(q[i + 2] >> 32), (unsigned)q[i + 2],
++		    (unsigned)(q[i + 3] >> 32), (unsigned)q[i + 3]);
 +	}
 +}

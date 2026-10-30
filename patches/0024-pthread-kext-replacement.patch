@@ -987,7 +987,7 @@ index 49fb60b..9b016cd 100644
  /*
   * pthread_kext_register is called by pthread.kext upon load, it has to provide
 diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
-index cb27db6..78cf53c 100644
+index cb27db6..4b361ef 100644
 --- a/bsd/pthread/pthread_workqueue.c
 +++ b/bsd/pthread/pthread_workqueue.c
 @@ -226,8 +226,23 @@ wq_limit_cooperative_threads_for_proc SYSCTL_HANDLER_ARGS
@@ -1014,7 +1014,7 @@ index cb27db6..78cf53c 100644
  	}
  
  out:
-@@ -953,6 +968,80 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+@@ -953,6 +968,85 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
  	    uth->uu_save.uus_workq_park_data.idle_stamp + delay);
  }
  
@@ -1069,6 +1069,11 @@ index cb27db6..78cf53c 100644
 +	}
 +	crossxnu_threads_dump(p, "watchdog");
 +	crossxnu_workq_dump(p, NULL, "watchdog");
++	{
++		extern void crossxnu_dispatch_dump(struct proc *p, const char *where);
++
++		crossxnu_dispatch_dump(p, "watchdog");
++	}
 +	proc_rele(p);
 +
 +	if (crossxnu_wd_call != NULL) {
