@@ -17,3 +17,5 @@
 0017-platform-expert-stub.patch
 0018-pthread-kec-optional.patch
 0019-wait-max-cpus-stub.patch
+0020-commpage-updates-before-init.patch
+0021-aes-without-corecrypto.patch

@@ -1,0 +1,59 @@
+diff --git a/osfmk/i386/commpage/commpage.c b/osfmk/i386/commpage/commpage.c
+index 5386f2b..3047aca 100644
+--- a/osfmk/i386/commpage/commpage.c
++++ b/osfmk/i386/commpage/commpage.c
+@@ -89,6 +89,7 @@ extern vm_map_t commpage_text64_map;    // the shared submap, set up in vm init
+ 
+ 
+ char    *commPagePtr32 = NULL;          // virtual addr in kernel map of 32-bit commpage
++static bool commpage_initialized = false; // set once commpage_populate() has mapped the pages
+ char    *commPagePtr64 = NULL;          // ...and of 64-bit commpage
+ char    *commPageTextPtr32 = NULL;      // virtual addr in kernel map of 32-bit commpage
+ char    *commPageTextPtr64 = NULL;      // ...and of 64-bit commpage
+@@ -612,6 +613,7 @@ commpage_populate( void )
+ 	}
+ 
+ 	simple_lock_init(&commpage_active_cpus_lock, 0);
++	commpage_initialized = true;
+ 
+ 	commpage_update_active_cpus();
+ 	commpage_mach_approximate_time_init();
+@@ -969,6 +971,12 @@ commpage_update_dyld_flags(uint64_t value)
+ void
+ commpage_update_mach_approximate_time(uint64_t abstime)
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/* crossxnu: the scheduler can update the commpage before it is mapped. */
++	if (!commpage_initialized) {
++		return;
++	}
++#endif
+ #ifdef CONFIG_MACH_APPROXIMATE_TIME
+ 	uint64_t saved_data;
+ 	char *cp;
+@@ -1007,6 +1015,12 @@ commpage_update_mach_approximate_time(uint64_t abstime)
+ void
+ commpage_update_mach_continuous_time(uint64_t sleeptime)
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/* crossxnu: the scheduler can update the commpage before it is mapped. */
++	if (!commpage_initialized) {
++		return;
++	}
++#endif
+ 	char *cp;
+ 	cp = commPagePtr32;
+ 	if (cp) {
+@@ -1024,6 +1038,12 @@ commpage_update_mach_continuous_time(uint64_t sleeptime)
+ void
+ commpage_update_boottime(uint64_t boottime)
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/* crossxnu: the scheduler can update the commpage before it is mapped. */
++	if (!commpage_initialized) {
++		return;
++	}
++#endif
+ 	char *cp;
+ 	cp = commPagePtr32;
+ 	if (cp) {

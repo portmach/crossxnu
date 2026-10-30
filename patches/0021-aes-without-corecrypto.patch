@@ -1,0 +1,30 @@
+diff --git a/libkern/crypto/corecrypto_aes.c b/libkern/crypto/corecrypto_aes.c
+index 20ff4f1..61b0bdc 100644
+--- a/libkern/crypto/corecrypto_aes.c
++++ b/libkern/crypto/corecrypto_aes.c
+@@ -35,6 +35,12 @@
+ aes_rval
+ aes_encrypt_key(const unsigned char *key, int key_len, aes_encrypt_ctx cx[1])
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/* crossxnu: the corecrypto KEC is absent; fail instead of dereferencing NULL. */
++	if (g_crypto_funcs == NULL) {
++		return -1;
++	}
++#endif
+ 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_encrypt;
+ 
+ 	/* Make sure the context size for the mode fits in the one we have */
+@@ -72,6 +78,12 @@ aes_encrypt(const unsigned char *in_blk, unsigned char *out_blk, aes_encrypt_ctx
+ aes_rval
+ aes_decrypt_key(const unsigned char *key, int key_len, aes_decrypt_ctx cx[1])
+ {
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/* crossxnu: the corecrypto KEC is absent; fail instead of dereferencing NULL. */
++	if (g_crypto_funcs == NULL) {
++		return -1;
++	}
++#endif
+ 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_decrypt;
+ 
+ 	/* Make sure the context size for the mode fits in the one we have */

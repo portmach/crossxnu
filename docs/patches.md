@@ -58,6 +58,8 @@ Subject: [PATCH 000N/9999] <area>: <short description>
 | 0017 | `0017-platform-expert-stub.patch` | под `CROSSXNU_SECURITY_PERMISSIVE` `IOPanicPlatform` работает как встроенный platform expert (без ACPI) | **security/boot**: заглушка платформы, не macOS-совместимая |
 | 0018 | `0018-pthread-kec-optional.patch` | `pthread_init` не паникует без `com.apple.kec.pthread` | нет (только путь без KEC) |
 | 0019 | `0019-wait-max-cpus-stub.patch` | `ml_wait_max_cpus` не ждёт ACPI-перечисления CPU под permissive stub | нет (только путь без ACPI) |
+| 0020 | `0020-commpage-updates-before-init.patch` | time-update commpage не трогают страницы до `commpage_populate()` | нет (только ранний boot) |
+| 0021 | `0021-aes-without-corecrypto.patch` | AES key wrappers возвращают ошибку без `g_crypto_funcs` (TFO при `dlil_init`) | нет (только путь без KEC) |
 
 ### Патчи kc-tools
 

@@ -1,9 +1,9 @@
 # Boot в QEMU (phase 1)
 
 **Статус:** ядро линкуется, грузится в QEMU, проходит kalloc, kext scan,
-PRNG, `vm_map_store`, IOKit и доходит до BSD init со встроенным
-platform-expert stub. Сейчас падает на обновлении commpage до её
-инициализации. Полной загрузки нет.
+PRNG, `vm_map_store`, IOKit, BSD init и сеть. Оно доходит до
+`Still waiting for root device` — без storage/APFS kext'ов root не
+монтируется. Полной загрузки нет, но ядро живое и крутит VFS-wait.
 
 ## Схема
 
@@ -133,10 +133,22 @@ kext'ов в KC есть `__PRELINK_INFO` с пустым
 - ACPI-перечисления CPU — патч 0019 заставляет `ml_wait_max_cpus()`
   объявить boot CPU вместо бесконечного ожидания.
 
-Теперь ядро доходит до BSD init. Следующий блокер —
-`commpage_update_mach_approximate_time()`: планировщик обновляет
-commpage раньше, чем она инициализирована, и `commPagePtr32` указывает
-в невалидную страницу.
+Дальше планировщик обновлял commpage раньше `commpage_populate()`;
+патч 0020 не даёт time-update'ам трогать страницы до инициализации, а
+патч 0021 возвращает ошибку из AES-обёрток без corecrypto KEC
+(`tcp_subr`/TFO дергает `aes_encrypt_key128` в `dlil_init`).
+
+Итог: ядро печатает BSD banner, инициализирует MAC framework, mbuf,
+AIO, `dlil` и поднимает `lo0`/`gif0`/`stf0`. Затем:
+
+```text
+rooting via boot-uuid from /chosen: dd5c6498-...
+Still waiting for root device
+```
+
+Это ожидаемая граница: root device — это storage-драйвер (AHCI/NVMe) и
+APFS, а они тоже kext'ы. Дальше без них некуда: VFS будет ждать
+`IOBSD`/`boot-uuid-media` сколько угодно.
 
 ### Kext'ы в fileset
 

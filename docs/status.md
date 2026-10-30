@@ -7,7 +7,7 @@
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | ядро грузится в QEMU до BSD init со встроенным platform stub; блокер — commpage |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | ядро грузится до BSD init и ждёт root device (нет storage/APFS kext'ов) |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -76,14 +76,16 @@ build/mig/mig -cc toolchain/bin/clang \
       kext'ов (патч `patches/kc-tools/`).
 - [x] Встроенный platform-expert stub (0017), `pthread` KEC (0018) и
       `ml_wait_max_cpus` (0019) обойдены; ядро доходит до BSD init.
-- [ ] Следующий блокер — запись в commpage до её инициализации, см. §3.
+- [x] Guard для commpage-update (0020) и AES без corecrypto (0021):
+      ядро печатает BSD banner, поднимает `lo0`/`gif0`/`stf0` и ждёт root device.
+- [ ] Следующий блокер — root device: нужны storage/APFS kext'ы, см. §3.
 - [ ] LTO выключен (`BUILD_LTO=0`); включить после проверки cctools LTO.
 
 ## 3. Блокеры линковки (по состоянию на 2026-10-29)
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `commpage_update_mach_approximate_time` пишет по невалидному `commPagePtr32` до `commpage_init` | не будить потоки/не обновлять commpage до инициализации commpage; либо порядок инициализации | **высокий** |
+| 1 | `Still waiting for root device` | подключить storage-драйверы (`AppleAHCI`/`IONVMe`) и APFS, либо собрать их; без них root не смонтировать | **высокий**: это уже userland-граница |
 | 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
@@ -130,3 +132,4 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | Ядро доходит до `IOPlatformExpert`; panic: `Unable to find driver for this platform: "ACPI"` — нужен platform expert kext |
 | 2026-10-30 | Встроенный platform-expert stub: IOKit стартует; дальше `pthread` KEC и `ml_wait_max_cpus`; ядро доходит до BSD init |
 | 2026-10-30 | Новый блокер: `commpage_update_mach_approximate_time` пишет по невалидному commpage до `commpage_init` |
+| 2026-10-30 | commpage и AES обойдены; ядро дошло до BSD init, подняло сеть и ждёт root device |
