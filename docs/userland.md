@@ -489,3 +489,50 @@ panic(cpu 0 caller 0xffffff80007c9d2e):  initproc failed to start --
 сначала создать поток и **не** резюмировать его (посмотреть, что он появился в
 `ps -M`), потом выставить состояние и проверить `thread_getstatus`, и только
 потом отдавать порт и резюмировать.
+
+#### `bsdthread_create`: что уже выяснено (проверено в QEMU)
+
+Разбор шёл по трапам, которые libpthread делает в новом потоке. Каждый
+следующий вызов убивал pid 1 (он создаёт потоки при старте), поэтому ядро
+паниковало с `initproc failed to start` — это не поломка `load_init_program`,
+а смерть pid 1.
+
+Порядок открытий:
+
+1. `BUG IN LIBPTHREAD: thread_set_tsd_base() wasn't called by the kernel` —
+   ядро обязано вызвать `thread_set_tsd_base(th, pthread_t)`. Мало того,
+   libpthread проверяет **флаг в `%r9`**: бит 28 (`0x10000000`) означает
+   «ядро вызвало thread_set_tsd_base()». Бит 29
+   (`PTHREAD_START_SUSPENDED`) должен остаться нулевым: с ним libpthread
+   уходит в другую заглушку.
+2. `BUG IN LIBPTHREAD: pthread_t was corrupted` — потому что в `%rdi`
+   передавался `func`. `__pthread_start` — это `void __pthread_start(pthread_t)`,
+   то есть **`rdi = pthread_t`**, а точку входа и аргумент libpthread берёт из
+   самой структуры `_pthread` (`+0x90` — функция, `+0x98` — аргумент),
+   и проверяет `self == *(uint64_t *)self ^ __pthread_ptr_munge_token`.
+3. `BUG IN CLIENT OF LIBPTHREAD: Unable to allocate thread port, possible port
+   leak` — следующая остановка: проверка `leal 0x1(%rax); cmpl $1; jbe` над
+   полем `pthread+0xf8`, то есть там должен лежать валидный порт потока
+   (не 0 и не -1). Мы отдаём порт через `*retval`; дальше нужно понять, кто и
+   когда пишет его в `+0xf8` — сам kext или userland.
+
+Итоговая рабочая последовательность (она и оставлена в коде как комментарий,
+резюмируя):
+
+```c
+thread_create_immovable(current_task(), &th);
+state.rip = proc_get_threadstart(p);
+state.rsp = user_stack;
+state.rdi = user_pthread;        /* pthread_t! */
+state.r9  = 0x10000000;          /* «tsd base уже выставлен», без бита 29 */
+thread_set_wq_state64(th, &state);
+thread_set_tsd_base(th, user_pthread);
+sright = convert_thread_to_port_immovable(th);
+name = ipc_port_copyout_send_pinned(sright, get_task_ipcspace(current_task()));
+thread_resume(th);
+```
+
+С этой последовательностью поток реально стартует и проходит три проверки
+libpthread; упирается в четвёртую (порт в `pthread+0xf8`). Пока она не
+разобрана, функция возвращает `ENOTSUP`, чтобы ядро грузилось, — иначе pid 1
+умирает и система паникует.
