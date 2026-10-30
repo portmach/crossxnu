@@ -575,3 +575,23 @@ crossxnu: bsdthread_create: suspended port=7939 flags=0x90008ff
 битам workqueue-атрибутов внутри `flags` либо по `uthread->uu_workq_flags`.
 Пара `threadstart`/`wqthread` теперь видна в логе на каждом создании потока,
 что и нужно для следующего шага — запускать workqueue-потоки с `p_wqthread`.
+#### `workq_create_threadstack`: стеки workqueue-потоков
+
+Заглушка заменена настоящим выделением стека в адресном пространстве
+процесса — ровно так, как это делал kext:
+
+```c
+size = round_page(max(proc_get_pthsize(p), 64 KiB));
+vm_allocate(vmap, &addr, size, VM_FLAGS_ANYWHERE);
+*out_addr = addr;
+```
+
+Именно этого ждёт внутриядерный код (`pthread_workqueue.c:workq_add_new_idle_thread`):
+он кладёт адрес в `uth->uu_workq_stackaddr` и потом передаёт его в
+`workq_setup_thread()`.
+
+Пока не задействовано: `launchd` падает в
+`__dispatch_root_queues_init_once` (строка `Root queue initialization failed`)
+**до** того, как путь запроса workqueue-потока запускается. Следующий шаг —
+понять, что именно проверяет эта функция; оставшиеся хуки
+(`workq_setup_thread`, `workq_handle_stack_events`) — главные кандидаты.
