@@ -147,3 +147,5 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | **Userland выполняется**: `cat`/`sh`/скрипт запускаются и завершаются с кодом; launchd падает в SIGILL. Блокер — `/dev/console` (km-драйвер) |
 | 2026-10-30 | Консоль починена (serial-шим в `cons.c`); статический init (`userland/init.c`) поднимает `bash` |
 | 2026-10-30 | **Работает macOS userland**: `uname`, `sw_vers` (26.7.2/25G332), `ls`, `ps`, `mount`, `sysctl`, `cat` на HFS+ root; корень пока read-only |
+| 2026-10-30 | Корень монтируется rw, но том заполнен на 100% (`freeBlocks = 0`) → `ENOSPC`; добавлен scratch-том `md1` (256 MB) |
+| 2026-10-30 | `newfs_hfs` на `md1` работает после дисковых ioctl в `memdev`; монтирование свежего тома падает в `cat_create` |
