@@ -111,6 +111,44 @@ stderr тоже закрыт. Статический stub (`userland/init.c`, 8.
 `Failed to exec /bin/bash as variant for /bin/sh (2: No such file or directory)`
 и выходит с кодом 1. Поэтому в образ нужно положить оба файла.
 
+## Записываемый root и scratch-том
+
+Корень монтируется read-only жёстко: `vfs_rootmountalloc_internal()` ставит
+`MNT_RDONLY | MNT_ROOTFS`, а на macOS его потом переводит в rw уже userland
+(через HFS+ update-mount с `hfs_mount_args`). Под `CROSSXNU_SECURITY_PERMISSIVE`
+флаг убран — корень монтируется как `(hfs, local)`, то есть rw.
+
+Но запись всё равно падает с `ENOSPC`: `xorrisofs` пишет том ровно по объёму
+данных, `freeBlocks = 0` (проверяется в volume header по смещению `0x34`).
+Смонтировать полный том rw можно, писать в него нельзя.
+
+Поэтому в ядре добавлен второй memory device: `setconf()` выделяет 256 MB
+через `kmem_alloc(kernel_map, …)` и регистрирует их как `md1`
+(`crossxnu: scratch device md1`). Дальше userland должен был отформатировать
+его `newfs_hfs` и смонтировать в `/private/var`.
+
+Что уже работает:
+
+```text
+brw-------  1 root  operator  0x1000001 Jan  1 00:03 /dev/md1
+--- formatting md1 ---
+Initialized /dev/rmd1 as a 256 MB case-insensitive HFS Plus volume
+newfs ok
+```
+
+Для этого пришлось научить `memdev` отвечать на дисковые ioctl'ы, которые
+`newfs_hfs`/`mount_hfs` спрашивают у устройства (`DKIOCGETMAXBYTECOUNTREAD/
+WRITE`, `DKIOCGETTHROTTLEMASK`, `DKIOCGETPHYSICALBLOCKSIZE`, `DKIOCISVIRTUAL`,
+`DKIOCGETFEATURES`, `DKIOCGETPROVISIONSTATUS`, `DKIOCCORESTORAGE`,
+`DKIOCGETERRORDESCRIPTION`), и не менять сектор устройства по
+`DKIOCSETBLOCKSIZE` с raw-char узла.
+
+Осталось: **mount свежесозданного тома падает в ядре** — trap (invalid opcode,
+`hfs_assert`) внутри `cat_create` при `hfs_mountfs`. Корневой том (собранный
+`xorrisofs`) монтируется нормально, а пустой том от `newfs_hfs` — нет.
+Похоже на ветку создания/чтения пустого catalog B-tree, которой в перенесённом
+коде HFS+ не хватает; это следующий конкретный шаг.
+
 ## Ограничения, которые видны сразу
 
 - корень смонтирован **read-only** (`mount` → `hfs, local, read-only`),
