@@ -7,7 +7,7 @@
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | ядро грузится до BSD init и ждёт root device (нет storage/APFS kext'ов) |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | recovery-HFS+ монтируется, `/sbin/launchd` стартует и доходит до ignition; обычный root из `payloadv2` собран, но требует cryptex |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -85,11 +85,13 @@ build/mig/mig -cc toolchain/bin/clang \
 
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
-| 1 | `Still waiting for root device` | подключить storage-драйверы (`AppleAHCI`/`IONVMe`) и APFS, либо собрать их; без них root не смонтировать | **высокий**: это уже userland-граница |
-| 2 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
-| 3 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
-| 4 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
-| 5 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
+| 1 | ~~`Still waiting for root device`~~ | закрыт: встроенный HFS+ + `memdev` дают root с ramdisk | — |
+| 2 | `ignition blob not available` | blob из IMG4-манифеста (`security.mac.img4.ignition_blob`); либо патч проверки в dyld | **высокий**: userland-граница |
+| 3 | System cryptex отсутствует | `libSystem`/shared cache лежат в cryptex; в asset'е только RIDIFF/BXDIFF-диффы к нему | **высокий**: без него обычный `launchd` не стартует |
+| 4 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
+| 5 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
+| 6 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
+| 7 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
 
 ## 4. Как воспроизвести текущее состояние
 
@@ -110,13 +112,15 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 
 ## 5. Ближайшие шаги
 
-1. Проверить `kernel` в QEMU: bootloader/kernelcache, ранняя
-   инициализация, вывод `crossxnu: permissive code-signing profile enabled`.
-2. Сравнить symbol table и DriverKit vtable с Apple-сборкой
-   `xnu-12377.121.6`.
-3. Собрать полноценный `libcc_kext` вместо shim.
-4. Вернуть LTO после проверки cctools `ld64` (сейчас `BUILD_LTO=0`).
-5. Повторить для `DEVELOPMENT`, затем для `arm64`.
+1. Собрать нормальный HFS+ образ из `payloadv2`-root'а (`scripts/extract-payloadv2.py`)
+   и проверить, как далеко заходит обычный `launchd` без cryptex.
+2. Пройти ignition: проверить boot-args (`ignition_level`, `ignition_force_dylib_root`),
+   затем либо подсунуть `security.mac.img4.ignition_blob`, либо патчить dyld.
+3. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
+   из asset'а.
+4. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
+5. Собрать полноценный `libcc_kext` вместо shim; вернуть LTO.
+6. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал
 
@@ -133,3 +137,7 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | Встроенный platform-expert stub: IOKit стартует; дальше `pthread` KEC и `ml_wait_max_cpus`; ядро доходит до BSD init |
 | 2026-10-30 | Новый блокер: `commpage_update_mach_approximate_time` пишет по невалидному commpage до `commpage_init` |
 | 2026-10-30 | commpage и AES обойдены; ядро дошло до BSD init, подняло сеть и ждёт root device |
+| 2026-10-30 | HFS+ в ядре; recovery-root монтируется, `launchd` печатает Darwin Ignition Sequence и упирается в `ignition blob not available` |
+| 2026-10-30 | `payloadv2` разобран: pbzx вырезал поток на 8 МиБ, а не «multi-segment»; полная распаковка даёт 53 независимых Apple Archive |
+| 2026-10-30 | Обычный system root собран (19 GB, 179 712 файлов) без macOS-тулинга: `scripts/aa.py` + `scripts/extract-payloadv2.py` |
+| 2026-10-30 | Найден блокер обычного userland: `/usr/lib/libSystem.B.dylib` и dyld shared cache живут в системном cryptex, а в asset'е только RIDIFF/BXDIFF-диффы |

@@ -99,10 +99,12 @@ iBoot (или обычный, не-recovery root). Это не паника яд
 ## payloadv2 (обычный system root)
 
 `payloadv2/payload.*` — это `pbzx` (xz-чанки), после распаковки получается
-**Apple Archive** (`YAA1`), а не cpio. `libNeoAppleArchive`/`neoaa`
-извлекает один сегмент, но падает на
-`System/Library/Frameworks/QuartzCore.framework/.../default.metallib`:
-`DAT` = 160 MB, а в сегменте остаётся 8 MB. То есть крупные/dataless
-файлы размазаны по нескольким payload-сегментам (или ссылаются на
-внешние данные). Нужен multi-segment/dataless-экстрактор, а не
-одиночный `neoaa extract`.
+**Apple Archive** (`YAA1`), а не cpio. Раньше здесь было записано, что крупные
+файлы «размазаны по сегментам»: это оказалось ошибкой усечённой распаковки
+(лимит 8 MiB), а не формата. Полный разбор форматов, инструменты и результат
+(19 GB, 179 712 файлов) — в [`rootfs.md`](rootfs.md).
+
+Важно: корневой том из payload'ов **не самодостаточен** — `libSystem` и общий
+dyld shared cache лежат в системном cryptex, а в asset'е есть только диффы к
+нему. См. [`rootfs.md`](rootfs.md#чего-в-rootе-нет-cryptex).
+

@@ -17,3 +17,6 @@ upstream/xnu/BUILD/
 # Generated DriverKit IIG implementations
 upstream/xnu/iokit/DriverKit/*.iig.cpp
 upstream/xnu/iokit/Tests/TestServices/TestDextRematch.iig.cpp
+
+# Python bytecode
+__pycache__/
