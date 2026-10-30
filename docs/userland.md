@@ -595,3 +595,35 @@ vm_allocate(vmap, &addr, size, VM_FLAGS_ANYWHERE);
 **до** того, как путь запроса workqueue-потока запускается. Следующий шаг —
 понять, что именно проверяет эта функция; оставшиеся хуки
 (`workq_setup_thread`, `workq_handle_stack_events`) — главные кандидаты.
+#### `P_LREGISTER`: workq_open и инициализация root queues
+
+`workq_open()` отказывается работать, пока у процесса не выставлен
+`P_LREGISTER`, — этот флаг ставил kext в `bsdthread_register()`. Без него
+`pthread_workqueue_setup()` в libdispatch завершался ошибкой, и инициализация
+root queues делала `trap` (`Root queue initialization failed`).
+
+Обе функции регистрации теперь выставляют флаг. Результат — инициализация root
+queues прошла, `workq_open()` работает, и путь workqueue-потоков впервые
+запустился:
+
+```text
+crossxnu: workq_create_threadstack: addr=0x10e48b000 size=0x10000
+launchd.real cannot be run directly.
+```
+
+`launchd.real cannot be run directly.` — это собственное сообщение launchd
+(он здесь pid 9, а не pid 1), то есть процесс дошёл до своей же проверки. Затем
+ядро паникует с `#UD` на `0xffffff800079069d`:
+
+```text
+Panic ... Kernel trap at 0xffffff800079069d, type = 6=invalid opcode
+RCX: 0x000000010e48b000        ; адрес только что выделенного стека
+```
+
+Это `__builtin_unreachable()` сразу после вызова
+`pthread_functions->workq_setup_thread(...)` в `pthread_workqueue.c`: контракт
+хука — «не возвращаться» (kext передавал поток в userland и не возвращался), а
+наша заглушка возвращается. Следующий шаг — настоящий `workq_setup_thread`:
+выставить потоку пользовательское состояние (старт на `p->p_wqthread` с
+аргументами upcall'а) и разобраться с контрактом «не возвращаться» на местах
+вызова.
