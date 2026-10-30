@@ -7,7 +7,7 @@
 
 | Хост | Target | Конфигурация | Статус |
 |:-----|:-------|:-------------|:-------|
-| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | recovery-HFS+ монтируется, `/sbin/launchd` стартует и доходит до ignition; обычный root из `payloadv2` собран, но требует cryptex |
+| Arch Linux (WSL2), x86_64 | `x86_64-apple-macos26.5` | `RELEASE` | recovery-userland работает: `bash`, `uname`, `sw_vers`, `ls`, `ps`, `mount`, `sysctl` на HFS+ root; launchd пока SIGILL, обычный root требует cryptex |
 | Arch Linux, x86_64 | `x86_64-apple-macos26.5` | `DEVELOPMENT` | не проверялось |
 | Arch Linux, x86_64 | arm64 | — | не поддерживается (нужен KDK/Tightbeam/SPTM) |
 | macOS | любой | — | вне scope |
@@ -87,7 +87,7 @@ build/mig/mig -cc toolchain/bin/clang \
 |:--|:-------|:----------|:-------------|
 | 1 | ~~`Still waiting for root device`~~ | закрыт: встроенный HFS+ + `memdev` дают root с ramdisk | — |
 | 2 | launchd падает SIGILL | разобрать, какая инструкция/проверка; см. [`userland.md`](userland.md) | **высокий**: userland-граница |
-| 3 | `/dev/console` не работает | зарегистрировать serial `consdev` в platform-stub (`cnputc`/`cngetc`) | средний |
+| 3 | root смонтирован read-only | rw-mount HFS+ (md0 в RAM) + `/tmp`, `/private/var` | средний |
 | 4 | System cryptex отсутствует | `libSystem`/shared cache лежат в cryptex; в asset'е только RIDIFF/BXDIFF-диффы к нему | **высокий**: без него обычный `launchd` не стартует |
 | 4 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 5 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
@@ -145,3 +145,5 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | Ignition обойдён патчем recovery-dyld (`_ignite` → `ret 0`); dyld грузит launchd и ~50 образов |
 | 2026-10-30 | Закрыты два NULL-разыменования ядра: `pthread_functions` в 16 shim'ах и `amfi` в entitlement-функциях |
 | 2026-10-30 | **Userland выполняется**: `cat`/`sh`/скрипт запускаются и завершаются с кодом; launchd падает в SIGILL. Блокер — `/dev/console` (km-драйвер) |
+| 2026-10-30 | Консоль починена (serial-шим в `cons.c`); статический init (`userland/init.c`) поднимает `bash` |
+| 2026-10-30 | **Работает macOS userland**: `uname`, `sw_vers` (26.7.2/25G332), `ls`, `ps`, `mount`, `sysctl`, `cat` на HFS+ root; корень пока read-only |

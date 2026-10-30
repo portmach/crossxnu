@@ -52,45 +52,95 @@ libignition: 1: ignition blob not available
 
 ## Результат: userland работает
 
-После этих правок ядро больше не падает и честно показывает, что процесс
-пользователя выполнился:
+Итоговый лог (`-v serial=1`, init — статический stub, который запускает
+`/bin/sh /etc/rc.local`):
 
 ```text
-pid 1 exited -- no exit reason available -- (signal 0, exit 1)
-panic: initproc failed to start … (exit status 1)
-Thread 0 crashed
-RIP: 0x1047368de   RAX: 0x2000001     # 0x2000001 = exit(1)
+=== crossxnu: macOS userland on a non-macOS kernel ===
+Darwin  12377.121.6 Darwin Kernel Version 12377.121.6: … RELEASE_X86_64
+ProductName:            macOS
+ProductVersion:         26.7.2
+BuildVersion:           25G332
+
+--- root volume ---
+drwxr-xr-x   4 1000 1000    136 Oct 22  2026 System
+drwxr-xr-x  18 1000 1000    612 Oct 30  2026 bin
+dr-xr-xr-x   3 root wheel  3781 Jan  1 00:03 dev
+lrwxrwxrwx   1 1000 1000     11 Oct 22  2026 etc -> private/etc
+drwxr-xr-x  10 1000 1000    340 Oct 22  2026 usr
+lrwxrwxrwx   1 1000 1000     11 Oct 22  2026 var -> private/var
+
+--- processes ---
+  PID TTY           TIME CMD
+    1 ??         6:04.68 /bin/sh /etc/rc.local
+    6 ??         2:11.68 ps -A
+
+--- mounts ---
+root_device on / (hfs, local, read-only)
+devfs on /dev (devfs, local, nobrowse)
+
+--- sysctl ---
+kern.ostype: Darwin
+kern.version: Darwin Kernel Version 12377.121.6: …
 ```
 
-Проверка подменой init'а (ядро грузит ровно `/sbin/launchd`, поэтому образ
-собирается с другим файлом на этом месте):
+То есть на нашем ядре работают: dyld, `bash`/`sh`, `uname`, `sw_vers`, `ls`,
+`ps`, `mount`, `sysctl`, `cat` — настоящие бинарники macOS 26.7.2 (recovery
+ramdisk сборки `25G332`), с HFS+ в качестве корня, devfs и таблицей процессов.
 
-| init | результат |
-|:-----|:----------|
-| recovery `/bin/cat` | загрузился, dyld поднял ~30 образов, вышел с кодом 1 (нет stdin) |
-| payload `/bin/sh` | загрузился, вышел с кодом 1 |
-| `#!/bin/sh` + скрипт | интерпретатор запустился (`shared_region: [1(sh)]`), вышел с кодом 1 |
-| recovery `/sbin/launchd` | SIGILL — падает уже сам launchd, не dyld |
+## Как это получилось
 
-То есть dyld, libSystem, libobjc и десятки dylib'ов **работают на нашем ядре**;
-проблема конкретно в launchd.
+| Шаг | Файл |
+|:----|:-----|
+| обход ignition в dyld | `_ignite` → `xor eax,eax; ret`, `docs/userland.md` |
+| `pthread_functions == NULL` | `bsd/pthread/pthread_shims.c` |
+| `amfi == NULL` | `iokit/bsddev/IOKitBSDInit.cpp` |
+| `/dev/console` → serial | `bsd/dev/i386/cons.c` |
+| init без stdio | `userland/init.c` (статический Mach-O, `scripts/build-init.sh`) |
 
-## Следующий блокер: консоль
+## Почему понадобился свой init
 
-Вывод userland'а не доходит до serial. Причина — `/dev/console` в x86-ветке
-XNU обслуживается драйвером `km` (`bsd/dev/i386/km.c`): `kminit()` вызывается
-из `bsd_init()` **всегда**, `km_tty[0]` существует, но за ним стоит
-VGA-фреймбуфер и PS/2-клавиатура. При `-display none` запись уходит в
-эмулируемый VGA, а не в serial; ядро при этом пишет в serial напрямую
-(`PE_kputc = pal_serial_putc`).
+Ядро запускает `/sbin/launchd` как pid 1 **без fd 0/1/2**: `write(1, …)`
+возвращает `EBADF`. Скрипт с `#!` или сам `/bin/sh` умирают молча, потому что
+stderr тоже закрыт. Статический stub (`userland/init.c`, 8.6 KB, без dyld)
+открывает `/dev/console`, делает `dup2` на 0/1/2 и делает
+`execve("/bin/sh", {"/bin/sh", "/etc/rc.local"})`.
 
-Добавлен шим в `bsd/dev/i386/cons.c` (под `CROSSXNU_SECURITY_PERMISSIVE`):
-`cnopen`/`cnclose`/`cnread`/`cnwrite`/`cnioctl` при `crossxnu_serial_console()`
-работают напрямую с `serial_getc()`/`serial_putc()`, минуя km. Ядро с ним
-собирается, но вывод userland'а в serial пока не появился: `sh` завершается
-с кодом 1, не успев ничего напечатать. Дальше — проверить, доходит ли
-`cnwrite` вообще (fd 1/2 у pid 1 открывает сам ядро в `load_init_program`)
-и нет ли ошибки на `open("/dev/console")`.
+Ещё одна деталь: `/bin/sh` в macOS — это multi-call `bash`, который
+перезапускает себя как `/bin/bash`. Без `/bin/bash` в root'е он печатает
+`Failed to exec /bin/bash as variant for /bin/sh (2: No such file or directory)`
+и выходит с кодом 1. Поэтому в образ нужно положить оба файла.
+
+## Ограничения, которые видны сразу
+
+- корень смонтирован **read-only** (`mount` → `hfs, local, read-only`),
+  поэтому `/tmp/crossxnu.txt` не создаётся; нужен rw-mount и `/tmp`;
+- в recovery-root'е нет `/tmp` как symlink'а (есть только `etc`, `var`);
+- `kern.osversion` пустой — ядро не заполняет его для нашего конфига;
+- `uname` печатает `sysctl: Invalid argument` для одного поля (`hw.machine`).
+
+## Консоль: почему её не было и как починили
+
+`/dev/console` в x86-ветке XNU обслуживается драйвером `km`
+(`bsd/dev/i386/km.c`): `kminit()` вызывается из `bsd_init()` **всегда**,
+`km_tty[0]` существует, но за ним стоит VGA-фреймбуфер и PS/2-клавиатура.
+При `-display none` запись уходит в эмулируемый VGA, а не в serial; ядро при
+этом печатает в serial напрямую (`PE_kputc = pal_serial_putc`) — поэтому
+казалось, что «консоль работает, а userland молчит».
+
+Шим в `bsd/dev/i386/cons.c` (под `CROSSXNU_SECURITY_PERMISSIVE`) переводит
+`cnopen`/`cnclose`/`cnread`/`cnwrite`/`cnioctl` на `serial_getc()`/`serial_putc()`
+минуя km. Проверка статическим probe'ом:
+
+```text
+crossxnu: cnopen entry dev=0
+crossxnu: cnopen(serial console)
+PROBE: static userland on crossxnu
+pid 1 exited -- no exit reason available -- (signal 0, exit 42)
+```
+
+`42` — код «write(1) успешно записал весь баннер»; до шима тот же probe
+возвращал `9` (`EBADF`), потому что pid 1 не получает fd'ов от ядра.
 
 ## Что изменено в ядре
 
@@ -106,8 +156,21 @@ VGA-фреймбуфер и PS/2-клавиатура. При `-display none` з
 ## Воспроизведение
 
 ```bash
-# recovery-root + патченный dyld
+# 1. init-заглушка (статический Mach-O) и rc.local
+./scripts/build-init.sh build/init
+cp build/init  ~/recovery/sbin/launchd          # ядро грузит именно этот путь
+cp userland/rc.local ~/recovery/etc/rc.local
+
+# 2. /bin/sh и /bin/bash из payload-root'а (bash перезапускает себя как /bin/bash)
+cp ~/aa/root/bin/sh   ~/recovery/bin/sh
+cp ~/aa/root/bin/bash ~/recovery/bin/bash
+
+# 3. образ и ESP
 python3 scripts/hfs-image.py ~/recovery ~/rec.hfs
 mcopy -o -i build/esp32.img ~/rec.hfs ::/ramdisk.img
 # boot-args на ESP: -v serial=1
 ```
+
+Важно: dyld в образе — пропатченный (см. выше), иначе до userland дело не
+дойдёт. Оригинальный `launchd` сохранён как `/sbin/launchd.real`.
+
