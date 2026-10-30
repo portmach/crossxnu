@@ -266,3 +266,24 @@ tree — теперь `tsc_init()` предпочитает это значен�
 | 2026-10-30 | Сторожевой дамп планировщика показал: после `logging initialized` главный поток завершается **штатно** (`dispatch_main()` → `pthread_exit`), остаются 3 потока в ожидании и `req=0` у workqueue; процесс блокируется, а не крутится (CPU-время QEMU перестаёт расти). |
 | 2026-10-30 | Исправлены гостевые часы: `tsc_init()` теперь берёт `TSCFrequency` из device tree (loader мерил TSC по `BS->Stall`); было ~35× быстрее реального времени. |
 | 2026-10-30 | Патч-серия переразбита: `0024` (pthread) и новый `0028-bringup-tracing` (диагностика); `0011` дополнен TSC-частотой из DT. Проверено: `apply-patches.sh` (26 патчей) воспроизводит дерево байт в байт. |
+
+### Что говорит исходник libdispatch (проверено по `upstream/libdispatch`)
+
+* `_dispatch_main_queue_drain()` (src/queue.c) требует, чтобы очередь main
+  дренировал **главный поток**: `_dispatch_queue_is_thread_bound(dq)` и
+  `_dq_state_drain_locked_by_self(dq_state)`, иначе — `DISPATCH_CLIENT_CRASH`
+  («… called after dispatch_main()» / «from the wrong thread»).
+* Но в `_dispatch_runloop_queue_wakeup()` есть ветка под `DISPATCH_WAKEUP_MAKE_DIRTY`
+  (rdar://81886582): если главный поток уже **отпустил drain-lock** (то есть
+  вышел из `dispatch_main`), постановка работы уходит в обычный
+  `_dispatch_lane_wakeup()`, и очередь дренит **workqueue-поток**.
+  Наблюдение это подтверждает: после выхода главного потока boot-задачи
+  продолжали печататься с `tid=185/186/…` (workqueue-потоки).
+
+Следствие: механизм «очередь main обслуживается wq-потоками» у нас работает.
+В момент остановки ядро не видит **ни одного** syscall pid 1 (`kevent_qos`,
+`workq_kernreturn`, `ulock_wake` — ни одного), то есть libdispatch не просил
+поток. Значит, либо в очереди действительно пусто, либо событие потерялось
+внутри kevent/workloop до постановки запроса — это и надо проверять
+следующим шагом (дамп количества pending-событий kqueue/workloop процесса
+из сторожевого таймера).
