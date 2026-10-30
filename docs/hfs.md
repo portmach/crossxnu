@@ -95,3 +95,14 @@ vm: initializing swap
 печатает Darwin Ignition Sequence. Затем recovery сам завершает
 работу: `ignition blob not available` — нужен ignition blob от
 iBoot (или обычный, не-recovery root). Это не паника ядра.
+
+## payloadv2 (обычный system root)
+
+`payloadv2/payload.*` — это `pbzx` (xz-чанки), после распаковки получается
+**Apple Archive** (`YAA1`), а не cpio. `libNeoAppleArchive`/`neoaa`
+извлекает один сегмент, но падает на
+`System/Library/Frameworks/QuartzCore.framework/.../default.metallib`:
+`DAT` = 160 MB, а в сегменте остаётся 8 MB. То есть крупные/dataless
+файлы размазаны по нескольким payload-сегментам (или ссылаются на
+внешние данные). Нужен multi-segment/dataless-экстрактор, а не
+одиночный `neoaa extract`.
