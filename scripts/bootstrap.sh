@@ -27,6 +27,10 @@ if [[ ! -d "${CROSSXNU_XNU}" ]]; then
 fi
 
 "${SCRIPT_DIR}/apply-patches.sh"
+
+# The in-kernel HFS+ tree is generated from upstream/hfs, not stored in the
+# repository (see docs/legal.md); it has to exist before the build.
+"${SCRIPT_DIR}/sync-hfs.sh"
 "${SCRIPT_DIR}/build-mig.sh"
 "${SCRIPT_DIR}/build-host-tools.sh"
 "${SCRIPT_DIR}/build-cctools.sh"
