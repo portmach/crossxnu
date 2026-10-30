@@ -458,3 +458,34 @@ crossxnu: user #UD rip=0x101704d74 page_off=0xd74 insn=0f 0b 65 48 8b 04 25 ...
 строка `BUG IN LIBDISPATCH: Root queue initialization failed` — то есть
 создание root queue'ов требует уже настоящих workqueue-потоков
 (`bsdthread_create` + `workq_*`), а не заглушек.
+
+#### Первый заход на `bsdthread_create` (откатан)
+
+Механизм был собран из внутриядерных примитивов:
+
+- `thread_create_immovable(current_task(), &th)` — поток и его `uthread`;
+- `thread_set_wq_state64(th, &state)` — пользовательские `rip`/`rsp`/`rdi`/`rsi`/`rdx`
+  (`_thread_start` в libsystem_pthread — обычная функция, аргументы приходят в
+  регистрах: `rdi=func`, `rsi=funcarg`, `rdx=pthread`);
+- `convert_thread_to_port_immovable()` + `ipc_port_copyout_send_pinned()` —
+  порт, который libpthread получает как результат syscall'а, затем
+  `thread_resume()`.
+
+Но загрузка с этой версией упала **до** любого вызова из userland:
+
+```text
+panic(cpu 0 caller 0xffffff80007c9d2e):  initproc failed to start --
+    exit reason namespace 2 subcode 0x4
+```
+
+То есть ломается `load_init_program()`, а не наш код, — значит в реализации
+неверна одна из предпосылок (шаблон `thread_ro`, порядок «порт → resume»,
+либо адрес `retval`: в таблице он `user_addr_t *`, хотя порт — 32-битный
+`mach_port_name_t`). Правка откатана до честного `ENOTSUP` (код первой версии
+остался в истории git), ядро снова грузится, `launchd` упирается в ту же
+строку `Root queue initialization failed`.
+
+Следующая попытка должна делаться по шагам, с проверкой после каждого:
+сначала создать поток и **не** резюмировать его (посмотреть, что он появился в
+`ps -M`), потом выставить состояние и проверить `thread_getstatus`, и только
+потом отдавать порт и резюмировать.
