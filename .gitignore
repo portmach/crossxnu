@@ -20,3 +20,4 @@ upstream/xnu/iokit/Tests/TestServices/TestDextRematch.iig.cpp
 
 # Python bytecode
 __pycache__/
+upstream/xnu-loader/

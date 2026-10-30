@@ -286,3 +286,57 @@ mcopy -o -i build/esp32.img ~/rec.hfs ::/ramdisk.img
 Важно: dyld в образе — пропатченный (см. выше), иначе до userland дело не
 дойдёт. Оригинальный `launchd` сохранён как `/sbin/launchd.real`.
 
+
+## launchd: code signing и SIGILL
+
+Записываемый `/private/var` (см. [`hfs.md`](hfs.md)) — необходимое, но не
+достаточное условие: `launchd` всё равно умирает с SIGILL. Первые сообщения
+на этом пути были про code signing:
+
+```text
+sh-3.2# /sbin/launchd.real
+unable to validate security-critical blob: 85 [9|4208886145]
+check_signature[pid: 7]: error = 1
+proc 7: load code signature error 4 for file "launchd.real"
+Text page corruption detected for pid 7
+Illegal instruction: 4
+```
+
+- `85` = `EBADEXEC`, `4208886145` = `0xfade8181` =
+  `CSMAGIC_EMBEDDED_LAUNCH_CONSTRAINT`. `validate_auxiliary_signed_blobs()`
+  в `bsd/kern/ubc_subr.c` требует слоты 8..11 (self/parent/responsible/library
+  launch constraints). У recovery-`launchd` нет слота 9
+  (`CSSLOT_LAUNCH_CONSTRAINT_PARENT`), поэтому подпись не загружалась вовсе
+  (`load code signature error 4`), и процесс оставался без `cs_blob`.
+- `Text page corruption detected` (`osfmk/vm/vm_fault.c`) — cdhash текстовой
+  страницы не сходится. SHA-256 в ядре приходит из corecrypto KEC
+  (`g_crypto_funcs`), а без него шимы в `libkern/crypto/corecrypto_sha2.c`
+  возвращают нулевой дайджест: проверка не может пройти в принципе. Ядро
+  выбрасывало годную страницу из объекта, после чего процесс мог выполнять
+  уже освобождённую страницу.
+
+Под permissive-профилем обе проверки больше не enforced:
+
+| Файл | Что добавлено |
+|:-----|:--------------|
+| `bsd/kern/ubc_subr.c` | `crossxnu_enforce_aux_signed_blobs = false`; `cs_blob_init()` грузит подпись без launch constraints |
+| `osfmk/vm/vm_fault.c` | `crossxnu_cs_enforce_text_pages = false`; `CROSSXNU_VMP_CS_TAINTED()` не помечает страницу и не выбрасывает её |
+
+Оба переключателя — обычные глобалы (`bool`), а не `#if`, чтобы код остался
+собранным и включался одной строкой, когда появится настоящий SHA-256.
+
+После пересборки `security-critical blob` и `Text page corruption` исчезли,
+подпись грузится. SIGILL остался и это **настоящая** недопустимая инструкция:
+QEMU `-d int` показывает ровно один `v=06 e=0000 cpl=3` c
+`IP=0x1088d704f`. Ни в `launchd.real`, ни в `dyld`, ни в библиотеках нет
+`ud0/ud1/ud2` по этому смещению в странице (`0x4f`), так что это не
+clang-заглушка `__builtin_trap`. Рабочие версии:
+
+1. инструкция, которой нет в текущей конфигурации (например `xgetbv` без
+   `CR4.OSXSAVE`, или AVX-код, выбранный по CPUID);
+2. код, сгенерированный dyld во время выполнения (у нас нет shared cache;
+   `vm_shared_region_start_address()` возвращает `0x1`);
+3. страница, содержимое которой не совпадает с файлом.
+
+Следующий шаг — печатать в ядре для user-mode `#UD` путь образа и 8 байт по
+`RIP` (в `osfmk/i386/trap.c`), чтобы ответить на эти вопросы одним запуском.
