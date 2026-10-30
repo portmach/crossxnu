@@ -86,13 +86,13 @@ build/mig/mig -cc toolchain/bin/clang \
 | # | Блокер | Что нужно | Риск для ABI |
 |:--|:-------|:----------|:-------------|
 | 1 | ~~`Still waiting for root device`~~ | закрыт: встроенный HFS+ + `memdev` дают root с ramdisk | — |
-| 2 | `ignition blob not available` | blob из IMG4-манифеста (`security.mac.img4.ignition_blob`); либо патч проверки в dyld | **высокий**: userland-граница |
-| 3 | System cryptex отсутствует | `libSystem`/shared cache лежат в cryptex; в asset'е только RIDIFF/BXDIFF-диффы к нему | **высокий**: без него обычный `launchd` не стартует |
+| 2 | launchd падает SIGILL | разобрать, какая инструкция/проверка; см. [`userland.md`](userland.md) | **высокий**: userland-граница |
+| 3 | `/dev/console` не работает | зарегистрировать serial `consdev` в platform-stub (`cnputc`/`cngetc`) | средний |
+| 4 | System cryptex отсутствует | `libSystem`/shared cache лежат в cryptex; в asset'е только RIDIFF/BXDIFF-диффы к нему | **высокий**: без него обычный `launchd` не стартует |
 | 4 | DriverKit ABI | `iig-port` генерирует; сравнить vtable/символы с Apple 26.5 | средний: DriverKit ABI |
 | 5 | `libcc_kext` — shim, не реальный C++ runtime | собрать/подключить Apple-совместимый `libcc_kext` | средний |
 | 6 | `__builtin_xnu_type_*` | fallback-патчи 0004/0005 | средний (hardening) |
 | 7 | `libTightbeam` | только для arm64/новых платформ | нет для x86_64 |
-
 ## 4. Как воспроизвести текущее состояние
 
 ```bash
@@ -112,15 +112,16 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 
 ## 5. Ближайшие шаги
 
-1. Собрать нормальный HFS+ образ из `payloadv2`-root'а (`scripts/extract-payloadv2.py`)
-   и проверить, как далеко заходит обычный `launchd` без cryptex.
-2. Пройти ignition: проверить boot-args (`ignition_level`, `ignition_force_dylib_root`),
-   затем либо подсунуть `security.mac.img4.ignition_blob`, либо патчить dyld.
-3. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
-   из asset'а.
-4. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
-5. Собрать полноценный `libcc_kext` вместо shim; вернуть LTO.
-6. Повторить для `DEVELOPMENT`, затем для `arm64`.
+1. Зарегистрировать serial-console в platform-stub'е (`/dev/console`), чтобы
+   получить интерактивный shell на recovery-userland.
+2. Разобрать SIGILL в recovery-`launchd` (userland уже выполняется, см.
+   [`userland.md`](userland.md)).
+3. Вынести правки ядра (pthread/AMFI guards) в `patches/`.
+4. Разобрать `RIDIFF10`/`BXDIFF50` — можно ли восстановить базу system cryptex
+   из asset'а; без неё обычный userland не запустится.
+5. Сравнить symbol table и DriverKit vtable с Apple-сборкой `xnu-12377.121.6`.
+6. Собрать полноценный `libcc_kext` вместо shim; вернуть LTO.
+7. Повторить для `DEVELOPMENT`, затем для `arm64`.
 
 ## 6. Журнал
 
@@ -141,3 +142,6 @@ symbol table/vtable не сверены с Apple. Критерий — загр�
 | 2026-10-30 | `payloadv2` разобран: pbzx вырезал поток на 8 МиБ, а не «multi-segment»; полная распаковка даёт 53 независимых Apple Archive |
 | 2026-10-30 | Обычный system root собран (19 GB, 179 712 файлов) без macOS-тулинга: `scripts/aa.py` + `scripts/extract-payloadv2.py` |
 | 2026-10-30 | Найден блокер обычного userland: `/usr/lib/libSystem.B.dylib` и dyld shared cache живут в системном cryptex, а в asset'е только RIDIFF/BXDIFF-диффы |
+| 2026-10-30 | Ignition обойдён патчем recovery-dyld (`_ignite` → `ret 0`); dyld грузит launchd и ~50 образов |
+| 2026-10-30 | Закрыты два NULL-разыменования ядра: `pthread_functions` в 16 shim'ах и `amfi` в entitlement-функциях |
+| 2026-10-30 | **Userland выполняется**: `cat`/`sh`/скрипт запускаются и завершаются с кодом; launchd падает в SIGILL. Блокер — `/dev/console` (km-драйвер) |
