@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/i386/systemcalls.c b/bsd/dev/i386/systemcalls.c
-index a352414..f0b4726 100644
+index a352414..01b0da3 100644
 --- a/bsd/dev/i386/systemcalls.c
 +++ b/bsd/dev/i386/systemcalls.c
-@@ -59,6 +59,216 @@
+@@ -59,6 +59,281 @@
  
  #if CONFIG_MACF
  #include <security/mac_framework.h>
@@ -16,6 +16,8 @@ index a352414..f0b4726 100644
 + */
 +extern void crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b);
 +extern void crossxnu_trace_path(struct proc *p, int code, uint64_t *arg);
++extern void crossxnu_trace_ret(struct proc *p, int code, int error,
++    uint64_t rval);
 +
 +void
 +crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b)
@@ -126,6 +128,69 @@ index a352414..f0b4726 100644
 +	return 0;
 +}
 +
++/*
++ * crossxnu: record the result of every pid-1 syscall so a later abort can be
++ * explained by the calls that failed just before it.  The ring keeps the last
++ * 24 calls (number, errno, return value) and is dumped when pid 1 exits or
++ * calls abort_with_payload().
++ */
++struct crossxnu_ret_entry {
++	int      re_code;
++	int      re_error;
++	uint64_t re_rval;
++};
++
++static struct crossxnu_ret_entry crossxnu_ret_ring[24];
++static unsigned int crossxnu_ret_next;
++static unsigned int crossxnu_ret_dumped;
++
++static const char *
++crossxnu_syscall_name(int code)
++{
++	return (code >= 0 && code < 600 && syscallnames[code] != NULL) ?
++	       syscallnames[code] : "?";
++}
++
++void
++crossxnu_trace_ret(struct proc *p, int code, int error, uint64_t rval)
++{
++	unsigned int i;
++
++	if (p == NULL || p->p_pid != 1) {
++		return;
++	}
++	i = crossxnu_ret_next & 23;
++	crossxnu_ret_ring[i].re_code = code;
++	crossxnu_ret_ring[i].re_error = error;
++	crossxnu_ret_ring[i].re_rval = rval;
++	crossxnu_ret_next++;
++
++	if (error != 0) {
++		printf("crossxnu: p1 errno %s(%d) = %d\n",
++		    crossxnu_syscall_name(code), code, error);
++	}
++	if (code == 1 || code == 521) {         /* exit, abort_with_payload */
++		unsigned int n = crossxnu_ret_next - crossxnu_ret_dumped;
++		unsigned int start = crossxnu_ret_dumped;
++
++		if (n > 24) {
++			start = crossxnu_ret_next - 24;
++			n = 24;
++		}
++		printf("crossxnu: p1 last %u calls before %s:\n", n,
++		    crossxnu_syscall_name(code));
++		for (unsigned int k = 0; k < n; k++) {
++			unsigned int idx = (start + k) & 23;
++			struct crossxnu_ret_entry *e = &crossxnu_ret_ring[idx];
++
++			printf("crossxnu: p1 ret %-22s code=%-4d err=%-3d rv=%lld\n",
++			    crossxnu_syscall_name(e->re_code), e->re_code,
++			    e->re_error, (long long)e->re_rval);
++		}
++		crossxnu_ret_dumped = crossxnu_ret_next;
++	}
++}
++
 +void
 +crossxnu_trace_path(struct proc *p, int code, uint64_t *arg)
 +{
@@ -219,7 +284,7 @@ index a352414..f0b4726 100644
  #endif
  
  #if CONFIG_DTRACE
-@@ -308,6 +518,7 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -308,6 +583,7 @@ unix_syscall64(x86_saved_state_t *state)
  
  	code    = regs->rax & SYSCALL_NUMBER_MASK;
  	syscode = (code < nsysent) ? code : SYS_invalid;
@@ -227,7 +292,7 @@ index a352414..f0b4726 100644
  	DEBUG_KPRINT_SYSCALL_UNIX(
  		"unix_syscall64: code=%d(%s) rip=%llx\n",
  		code, syscallnames[syscode], regs->isf.rip);
-@@ -360,6 +571,9 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -360,6 +636,9 @@ unix_syscall64(x86_saved_state_t *state)
  		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
  	}
  
@@ -237,6 +302,16 @@ index a352414..f0b4726 100644
  	current_cached_proc_cred_update();
  
  	uthread->uu_rval[0] = 0;
+@@ -386,6 +665,9 @@ unix_syscall64(x86_saved_state_t *state)
+ 	error = (*(callp->sy_call))((void *) p, vt, &(uthread->uu_rval[0]));
+ 	AUDIT_SYSCALL_EXIT(code, p, uthread, error);
+ 
++	/* crossxnu: record pid 1's syscall results for post-mortem analysis */
++	crossxnu_trace_ret(p, code, error, uthread->uu_rval[0]);
++
+ #if CONFIG_MACF
+ skip_syscall:
+ #endif /* CONFIG_MACF */
 diff --git a/bsd/kern/kern_fork.c b/bsd/kern/kern_fork.c
 index 1d8db27..a07b8d1 100644
 --- a/bsd/kern/kern_fork.c

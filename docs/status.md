@@ -640,3 +640,66 @@ System/Library/CoreServices/SystemVersion.plist
 но каталоги заданий он по-прежнему не открывает — значит загрузка заданий
 происходит уже после списка boot-task'ов, и её ещё нужно довести до этого
 момента (или собранного «инсталлированного» root'а).
+
+### Что именно нужно launchd: APFS-тома, а не файлы (2026-10-31)
+
+Дальнейшие опыты и трассировка возвратов syscall'ов (в патче `0028` теперь
+есть кольцо последних 24 вызовов pid 1 с errno и дамп при
+`exit`/`abort_with_payload`) дали точный ответ.
+
+1. **Системный launchd как настоящий init.** Положили бинарь из payload'а
+   на место `/sbin/launchd` (pid 1 запускается ядром напрямую, стаб убран в
+   `/sbin/launchd.stub`). Поведение не изменилось: те же boot-task'и, те же
+   «No cookie…», тот же assert. Значит режим bootstrapper'а выбирается не по
+   argv[0] и не по способу запуска.
+
+2. **Заглушки томов.** Создали `System/Volumes/{Data,Preboot,iSCPreboot,Update}`,
+   cookie `.roots-installed` в Preboot/iSCPreboot и пустые
+   `var/db/com.apple.xpc.launchd/config/{system,user}.plist`. launchd стал
+   писать
+
+   ```
+   Found cookie: /System/Volumes/Preboot/<uuid>/.roots-installed
+   Found roots installed cookie
+   assertion failed: … launchd.real + 347679 …: 0xffffffffffffffff
+   ```
+
+   и сразу вызывает `abort_with_payload` (syscall 521) — ядро паниковало
+   «initproc exited».
+
+3. **Трасса возвратов показала, что виноват не syscall.** За всю загрузку
+   1549 неуспешных вызовов, но последние 24 перед abort — только бытовые
+   `lstat64 → ENOENT`, `sysctl → EPERM`, затем `kevent_id`, `sigprocmask` и
+   `abort_with_payload`. То есть падает внутренний assert, а не системный
+   вызов.
+
+4. **Причина видна по строкам самого launchd** (рядом с диагностикой cookie):
+
+   ```
+   fsctl(APFSIOC_GET_DEV_BY_ROLE) error: %d
+   fsctl(APFSIOC_IS_VOL_LOCKED) error: %d
+   Data Volume is %s
+   kern.apfsprebootuuid / kern.bootuuid / kern.bootobjectspath
+   /System/Volumes/Preboot/%s/%s
+   .roots-installed / .DarwinDepot
+   ```
+
+   То есть «roots installed» проверяется через APFS-специфичные `fsctl` и
+   sysctl'ы. У нас корень — HFS+ на ramdisk, `fsctl(APFSIOC_GET_DEV_BY_ROLE)`
+   возвращает `ENOENT` (`error: 2`), поэтому launchd честно пишет
+   «No cookie from system volume», а наши файлы-заглушки проходят лишь
+   частичную проверку и приводят к assert'у.
+
+**Вывод.** «Инсталлированный» root нельзя собрать одними файлами: launchd
+требует **APFS с ролями томов** (System/Data/Preboot), а APFS в XNU — это
+`AppleAPFS.kext`, которого у нас нет и который наш порт пока не умеет
+загружать/исполнять. Пока это так, единственный достижимый путь — bootstrapper
+(загрузка boot-task'ов), после которых он честно простаивает.
+
+Откат: `build/dis/revert-launchd-experiments.sh` (стаб вернулся в
+`/sbin/launchd`, recovery-бинарь — в `launchd.real`, заглушки томов удалены,
+образ пересобран, загрузка снова доходит до «logging initialized»).
+
+Что понадобится для следующего шага: APFS-драйвер в ядре (или загрузка
+`AppleAPFS.kext` из payload'а, что требует рабочего KEXT-загрузчика, IOKit и
+`libkern`), и уже на нём — минимальный APFS-том с ролями System/Data.
