@@ -13,7 +13,8 @@ param(
     [int]$Cpus = 1,
     [string]$Cpu = "Skylake-Client",
     [string]$Log = "build/serial-kc.log",
-    [int]$Seconds = 90
+    [int]$Seconds = 90,
+    [string[]]$ExtraArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,8 +50,10 @@ $qemuArgs = @(
     "-no-reboot"
 )
 
+$qemuArgs += $ExtraArgs
+$argString = ($qemuArgs | ForEach-Object { if ($_ -match "\s") { "`"$_`"" } else { $_ } }) -join " "
 Write-Host "booting ESP for $Seconds s, serial -> $logPath"
-$p = Start-Process -FilePath $Qemu -ArgumentList $qemuArgs -PassThru -WindowStyle Hidden
+$p = Start-Process -FilePath $Qemu -ArgumentList $argString -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds $Seconds
 if (-not $p.HasExited) {
     $p.Kill()
