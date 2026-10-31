@@ -1,58 +1,65 @@
 #!/usr/bin/env python3
-"""Dump the kmod_info of a kext embedded in a kernel collection.
+"""Dump the kmod_info of a kext embedded in a kernel collection (or a .kext).
 
-Usage: python3 build/dis/dump-kmod-info.py build/kernel.kc 0xffffff80011c1000
+Usage: python3 tools/kext-loader/dump-kmod-info.py build/kernel.kc 0xffffff80011c1000
+
+Field offsets follow the packed-4 layout XNU uses for kmod_info_t:
+  address 0x9c, size 0xa4, hdr_size 0xac, start 0xb4, stop 0xbc
+(all 8-byte fields, after name[64] + version[64] and the 32-bit scalars).
 """
 import struct
 import sys
+
+FIELDS = [
+    ("next", 0x00, "ptr"),
+    ("info_version", 0x08, "u32"),
+    ("id", 0x0c, "u32"),
+    ("name", 0x10, "str"),
+    ("version", 0x50, "str"),
+    ("reference_count", 0x90, "u32"),
+    ("reference_list", 0x94, "ptr"),
+    ("address", 0x9c, "ptr"),
+    ("size", 0xa4, "ptr"),
+    ("hdr_size", 0xac, "ptr"),
+    ("start", 0xb4, "ptr"),
+    ("stop", 0xbc, "ptr"),
+]
 
 
 def main():
     path = sys.argv[1]
     vmaddr = int(sys.argv[2], 16)
     data = open(path, "rb").read()
-    magic, cputype, cpusub, ftype, ncmds, sizeofcmds = struct.unpack_from("<IiiIII", data, 0)
+    ncmds = struct.unpack_from("<I", data, 16)[0]
     off = 32
-    segs = []
+    hit = None
     for _ in range(ncmds):
         cmd, cmdsize = struct.unpack_from("<II", data, off)
         if cmd == 0x19:  # LC_SEGMENT_64
             name = data[off + 8:off + 24].rstrip(b"\0").decode()
-            vm, vmsz, foff, fsz = struct.unpack_from("<QQQQ", data, off + 24)
-            segs.append((name, vm, vmsz, foff, fsz))
+            segvm, vmsz, foff, fsz = struct.unpack_from("<QQQQ", data, off + 24)
+            if segvm <= vmaddr < segvm + max(vmsz, fsz):
+                hit = (name, segvm, foff)
         off += cmdsize
 
-    print("filetype=0x%x ncmds=%d" % (ftype, ncmds))
-    hit = None
-    for name, vm, vmsz, foff, fsz in segs:
-        if vm <= vmaddr < vm + max(vmsz, fsz):
-            hit = (name, vm, foff)
-            print("segment %s vm=0x%x vmsz=0x%x fileoff=0x%x" % (name, vm, vmsz, foff))
     if not hit:
         sys.exit("vmaddr 0x%x not inside any segment" % vmaddr)
 
-    name, segoff, foff = hit
-    pos = foff + (vmaddr - segoff)
-    blob = data[pos:pos + 0xd0]
+    name, segvm, segfoff = hit
+    pos = segfoff + (vmaddr - segvm)
+    print("segment %s, kmod_info at file offset 0x%x" % (name, pos))
 
-    fields = [
-        ("next", 0), ("info_version", 8), ("id", 12), ("name", 16),
-        ("version", 80), ("reference_count", 144), ("reference_list", 148),
-        ("address", 156), ("size", 164), ("hdr_size", 172),
-        ("start", 180), ("stop", 188),
-    ]
-    print("--- kmod_info at file offset 0x%x (packed-4 layout shown) ---" % pos)
-    for fname, foff2 in fields:
-        raw8 = blob[foff2:foff2 + 8]
-        u64 = struct.unpack("<Q", raw8)[0] if len(raw8) == 8 else 0
-        u32 = struct.unpack("<I", blob[foff2:foff2 + 4])[0]
-        if fname in ("name", "version"):
-            s = blob[foff2:foff2 + 64].split(b"\0")[0].decode(errors="replace")
-            print("  %-16s @0x%03x = %r" % (fname, foff2, s))
-        elif fname in ("next", "reference_list", "start", "stop"):
-            print("  %-16s @0x%03x = 0x%016x" % (fname, foff2, u64))
+    for fname, foff, kind in FIELDS:
+        raw = data[pos + foff:pos + foff + 8]
+        if kind == "str":
+            print("  %-16s @0x%03x = %r" %
+                  (fname, foff, raw.split(b"\0")[0].decode(errors="replace")))
+        elif kind == "u32":
+            print("  %-16s @0x%03x = %d" %
+                  (fname, foff, struct.unpack("<I", raw[:4])[0]))
         else:
-            print("  %-16s @0x%03x = %d (0x%x)" % (fname, foff2, u32, u32))
+            print("  %-16s @0x%03x = 0x%016x" %
+                  (fname, foff, struct.unpack("<Q", raw)[0]))
 
 
 if __name__ == "__main__":
