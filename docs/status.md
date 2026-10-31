@@ -1244,16 +1244,200 @@ crossxnu: mount -t apfs /dev/disk0 /mnt1 -> 22
 контейнер с опцией `role=`), и узла тома `disk0s1` пока нет: тома
 перечисляет сам APFS при обработке монтирования.
 
-Что пробовать дальше, по порядку:
-
-1. Варианты `kernel_mount` в одном прогоне: `disk0` без `MNT_RDONLY`;
-   `disk0` с `KERNEL_MOUNT_BASESYSTEMROOT`; данные вида `disk0,role=system`
-   (APFS понимает `-o role=`), чтобы APFS сам нашёл том по роли.
-2. Если узел тома всё-таки нужен — заставить APFS перечислить тома (ioctl
-   `APFSIOC_GET_DEV_BY_ROLE` по контейнеру как раз это и делает; launchd
-   получает `ENOENT`, потому что ничего не смонтировано).
-
 Смонтировать том из kext'а нельзя: `kernel_mount()` — не экспортируется в
 таблицу символов ядра, поэтому kext вызывает `crossxnu_mount_apfs_volume()`
 (теперь не `static`), а вся работа с VFS остаётся в `bsd_init.c`.
 
+### 11.6 Причина EINVAL (22) при монтировании APFS-тома: fsmountargs и KERNEL_MOUNT_BASESYSTEMROOT
+
+Причина `EINVAL` (22) при вызове `kernel_mount("apfs", ...)` — не в APFS, а в
+проверке самого VFS: kernel-монтирование файловой системы с `VFC_VFSLOCALARGS`
+запрещено, если не выставлен специальный флаг. Ниже сначала эта проверка
+(§2), потом — как ведёт себя APFS, когда управление до неё всё-таки доходит
+(§1, §3: дизассемблирование KDK-драйвера, проверено по символам и строкам
+бинарника).
+
+#### 1. Как APFS парсит параметры монтирования
+
+Точка входа операций монтирования VFS в kext'е — `apfs_vfsop_mount` (смещение
+`0xa3607` в `__text`, VMA `0xffffff80031bb607`). Аргумент `data` (`fsmountargs`)
+передаётся в регистре `%r12`:
+
+```asm
+ffffff80031bb733:   testq   %r12, %r12          # fsmountargs == NULL?
+ffffff80031bb736:   jne     0xffffff80031bb74d  # если передан указатель -> ветка copyin
+ffffff80031bb738:   movq    %r13, %rdi
+ffffff80031bb73b:   movl    $0x144, %edx        # размер структуры аргументов: 324 байта
+ffffff80031bb740:   callq   _bzero              # при NULL: зануление всей структуры
+ffffff80031bb745:   movq    $0x0, -0x88(%rbp)
+ffffff80031bb750:   jmp     0xffffff80031bb954
+...
+# Если fsmountargs != NULL:
+ffffff80031bb772:   movl    $0x144, %edx
+ffffff80031bb777:   callq   _copyin             # копирование из user_addr_t fsmountargs!
+...
+# Проверка режима монтирования:
+ffffff80031bb954:   movzwl  0x8(%r13), %eax     # eax = args->mount_mode (+0x8)
+ffffff80031bb959:   cmpq    $0x8, %rax          # допустимые режимы: 0..8
+ffffff80031bb95d:   ja      0xffffff80031bbe40  # если > 8 -> ветка ошибки
+...
+ffffff80031bbe40:   leaq    str_invalid_mount_mode(%rip), %rsi # "%s:%d: invalid mount mode"
+                    callq   _log_warn
+                    movl    $0x16, %ebx         # 0x16 = 22 (EINVAL)
+```
+
+По смещению `+0x8` структуры аргументов APFS расположено двухбайтовое поле
+`mount_mode`. Если оно строго больше `8`, APFS логирует предупреждение
+`invalid mount mode` и немедленно завершает вызов с ошибкой `EINVAL` (`22`).
+
+В падавшем вызове эта ветка не исполнялась вообще (см. §2) — она интересна
+только тем, что произойдёт, когда управление до APFS всё-таки дойдёт.
+Проверено по бинарнику KDK: строка `"%s:%d: invalid mount mode\n"` находится
+по смещению `0xa3e40`, проверка `movzwl 0x8(%r13), %eax` / `cmpq $0x8` —
+по `0xa3954`, а `$0x144` (324 байта — размер структуры) встречается в
+функции трижды. Символы `_container_rootmount` (`0x55568`),
+`_container_decompose`, `_rootedRamdisk` в бинарнике есть.
+
+#### 2. Настоящая причина: guard в `mount_common` (`bsd/vfs/vfs_syscalls.c`)
+
+`kernel_mount()` сам выставляет `KERNEL_MOUNT_KMOUNT` (`0x400`), а для
+kernel-монтирования в `mount_common()` есть отдельный запрет — строки
+1348–1357:
+
+```c
+/*
+ * VFC_VFSLOCALARGS is not currently supported for kernel mounts,
+ * except in ROSV configs and for the initial BaseSystem root.
+ */
+if (kernelmount && (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS) &&
+    ((internal_flags & KERNEL_MOUNT_VOLBYROLE_MASK) == 0) &&
+    ((internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) == 0)) {
+	error = EINVAL;  /* unsupported request */
+	goto out1;
+}
+```
+
+У APFS стоит `VFC_VFSLOCALARGS` (она ждёт путь к устройству), а передавали мы
+только `KERNEL_MOUNT_NOAUTH` (`0x01`) — ни `VOLBYROLE`, ни `BASESYSTEMROOT`
+не было. Поэтому `EINVAL` возвращался **до** вызова `VFS_MOUNT`:
+`apfs_vfsop_mount` не запускалась, `fsmountargs` не разбирался, и строки
+`invalid mount mode` в логе не было — её там и не появлялось.
+
+Отсюда же и код ошибки: ровно `22`, а не `EFAULT` (`14`), потому что до
+`copyin()` в ветке `do_copyin_devpath` дело не доходило.
+
+Прежняя редакция этого раздела утверждала, что `mount_common` сдвигал
+`fsmountargs` на 8 байт и APFS получала 324 байта стекового мусора. Этот код
+(`fsmountargs += sizeof(devpath)`, строка 1520) в нашем вызове **не
+исполнялся** — разбор `fsmountargs` начинается уже после guard'а. Более того,
+при `KERNEL_MOUNT_BASESYSTEMROOT` указатель на путь берётся из kernel-памяти
+как `char **`, а при `VOLBYROLE` весь блок разбора пропускается
+(`mount_common()`, строка 1490, исключает `KERNEL_MOUNT_VOLBYROLE_MASK`), так
+что сдвиг не срабатывает ни в одном из доступных нам вариантов.
+
+Полезно помнить: `CONFIG_ROSV_STARTUP`, `CONFIG_MOUNT_VM` и
+`CONFIG_BASESYSTEMROOT` в этой сборке **включены** (видны как `-D` в
+`BUILD/obj/RELEASE_X86_64/**/*.o.json`), то есть mount-by-role и base-root
+пути в ядре есть — в отличие от того, что предполагалось в первой редакции.
+
+#### 3. Маршрутизация при `KERNEL_MOUNT_BASESYSTEMROOT` и `_container_rootmount`
+
+Когда флаг `KERNEL_MOUNT_BASESYSTEMROOT` (`0x80` из `<sys/mount_internal.h>`)
+передаётся в `kernel_mount()`:
+1. `mount_common()` корректно читает путь `devpath = *devnamepp` без лишнего
+   сдвига.
+2. `fsmountargs` явно сбрасывается в `USER_ADDR_NULL`.
+3. Сегмент поиска переключается в системное пространство (`UIO_SYSSPACE`).
+4. Внутри `apfs_vfsop_mount` срабатывает ветка `data == USER_ADDR_NULL`:
+   буфер аргументов обнуляется (`bzero`), поэтому `mount_mode = 0`.
+5. Дальше — **ожидание, а не проверенный факт** (подтвердить может только
+   загрузка): режим `mount_mode == 0` по таблице переходов уводит выполнение в
+   `_container_rootmount(devvp, ...)` (смещение `0x55568`):
+   - `_container_rootmount` проверяет, является ли устройство ramdisk'ом
+     (`_rootedRamdisk` по префиксу `md`).
+   - Для дисковых устройств (`disk0`) берёт `vnode_specrdev(devvp)` и ищет
+     соответствующий `IOMedia` в IORegistry (символа `lookup_registry_devno`
+     в бинарнике нет — вероятно, инлайнен или назван иначе).
+   - Выполняет декомпозицию контейнера (`_container_decompose`).
+   - Находит объект `AppleAPFSMedia` тома в контейнере и извлекает из реестра
+     его свойства `"BSD Major"` и `"BSD Minor"`.
+   - Конструирует `dev_t` тома, через `bdevvp()` получает vnode тома
+     (соответствующий `disk0s1`) и штатно монтирует файловую систему APFS.
+   Если это так, узел `/dev/disk0s1` для монтирования не нужен — `dev_t`
+   собирается из реестра.
+
+#### 4. Проверка ARV при монтировании контейнера
+
+В логе инициализации контейнера наблюдалась строчка:
+```
+authenticate_efi_forwarded_roothash:3984: evaluating authenticity of root hash
+populate_value_from_memory_descriptor:14523: populate_value_from_memory_descriptor md is NULL
+apfs_extract_root_hash_and_manifest_x86:14579: populate_value_from_memory_descriptor for root hash failed: 22
+authenticate_efi_forwarded_roothash:3989: apfs_extract_root_hash_and_manifest failed with error: Invalid argument (22)
+```
+Дизассемблирование `authenticate_efi_forwarded_roothash` показало, что проверка
+ARV (Authenticated Root Volume) активируется, когда роль тома установлена в
+`system` (`0x0001`), а загрузчик EFI не передал хеш корневой файловой системы
+(`md is NULL`). Код функции на строке 3989 логирует предупреждение (`_log_warn`),
+после чего зануляет возвращаемое значение (`xorl %r15d, %r15d`) и возвращает 0.
+Это предупреждение **не является фатальным** и не прерывает инициализацию схемы
+контейнера.
+
+#### 5. Что изменено в коде
+
+В `crossxnu_mount_apfs_volume()` (`upstream/xnu/bsd/kern/bsd_init.c` и патч
+`patches/0028-bringup-tracing.patch`):
+1. К вызову `kernel_mount` добавлен `KERNEL_MOUNT_BASESYSTEMROOT` (`0x80`):
+   `(KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT)`. Он снимает guard из
+   §2 и заодно велит VFS трактовать `fsmountargs` как kernel-указатель
+   `char **`. По комментарию в `<sys/mount_internal.h>` этот флаг и предназначен
+   для «монтирования базового корневого тома вместо полного» во время
+   `bsd_init()` — ровно наш случай.
+2. Если первая попытка вернула ошибку — повтор без `MNT_RDONLY` (только
+   `MNT_DONTBROWSE`). Это не про «незафиксированные транзакции»: просто
+   дешёвый способ в одном прогоне проверить, не отвергает ли APFS read-only
+   монтирование.
+3. Кандидаты перебираются от узла тома к контейнеру: `/dev/disk0s1`,
+   `/dev/disk0s2`, `/dev/disk0s3`, `/dev/disk0`.
+
+Статус: собирается, серия патчей консистентна (`0028` реверсится чисто), и
+**загрузкой подтверждено** — см. §11.7.
+
+
+### 11.7 Том APFS смонтирован (`mount -t apfs /dev/disk0 /mnt1 -> 0`)
+
+Прогон `build/serial-mnt6.log`:
+
+```
+crossxnu: no APFS volume node yet, polling
+CrossXnuRAMStorage: 8388608 bytes at <ptr>, 2048 blocks of 4096
+crossxnu: mount -t apfs /dev/disk0 /mnt1 -> 0
+apfs_vfsop_mount:2886: disk1s1 failed to find named root snapshot: Need authenticator (81)
+apfs_log_op_with_proc:3197: disk1s1 mounting volume crossxnu, requested by: kernel_task (pid 0)
+handle_mount:903: disk1s1 setting dev block size to 4096 from 512
+apfs_log_op_with_proc:3197: disk1s1 mount-complete volume crossxnu
+```
+
+Что это подтверждает:
+
+- `EINVAL` действительно давал guard в `mount_common` (§11.6.2), а не APFS:
+  с `KERNEL_MOUNT_BASESYSTEMROOT` тот же вызов проходит.
+- Ветка `data == NULL` ведёт в контейнерно-корневое монтирование, и `dev_t`
+  тома берётся из IORegistry: узел `/dev/disk0s1` не нужен, APFS сама
+  публикует `disk1s1` (том `crossxnu`) и монтирует его.
+- Строка `failed to find named root snapshot: Need authenticator (81)` —
+  ожидаемая: хеш корня загрузчик не передаёт, permissive-профиль это
+  допускает, монтирование продолжается.
+
+Чего это не даёт: `launchd` по-прежнему стартует с HFS-корня (`md0`) и пишет
+`Not booted from APFS, skipping apfs_boot_util`; том пустой и висит на
+`/mnt1`, поэтому поведение `launchd` не меняется — он останавливается там же,
+где и до правки. Чтобы монтирование на что-то влияло, том APFS должен **быть
+корнем** (pivot, как делает `imageboot.c` для BaseSystem) и **быть
+наполненным**.
+
+Ограничение по размеру: образ APFS лежит сегментом `__APFSIMG` в KC, а KC
+должен оставаться ниже `0x2800000` (bootinfo) — то есть на образ остаётся
+~8 МБ. Настоящий System-том туда не влезет. Выход — реальный диск вместо
+сегмента; в KDK есть x86_64-срезы у `AppleAHCIPort` и `IONVMeFamily`
+(`AppleVirtIOStorage` по-прежнему только arm64e, virtio-blk закрыт).

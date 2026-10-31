@@ -172,7 +172,7 @@ echo 0007-my-change.patch >> patches/series
 | `0025-security-permissive-runtime.patch` | permissive-режим: пропуск signed blobs, отключение taint-проверки текстовых страниц, отчёт о user `#UD` |
 | `0026-crypto-without-corecrypto.patch` | md5/sha2 без corecrypto KEC (ранние вызовы до загрузки kext) |
 | `0027-iokit-platform-glue.patch` | glue `IOKitBSDInit` и `iokit/conf/files` для сборки без Xcode |
-| `0028-bringup-tracing.patch` | временная bring-up диагностика: трассировка syscall/mach-trap/path для pid 1, дамп планировщика (кольцевой буфер решений `thread_setrun`/`processor_setrun`/`thread_select`/`thread_invoke`/`processor_idle`/`thread_dispatch` + `crossxnu_sched_dump`) и workqueue по сторожевому таймеру. Здесь же — хук в `bsd_init.c`, который просит OSKext загрузить `com.crossxnu.driver.CrossXnuRAMStorage` перед `com.apple.filesystems.apfs` (см. `docs/status.md` §11) |
+| `0028-bringup-tracing.patch` | временная bring-up диагностика: трассировка syscall/mach-trap/path для pid 1, дамп планировщика (кольцевой буфер решений `thread_setrun`/`processor_setrun`/`thread_select`/`thread_invoke`/`processor_idle`/`thread_dispatch` + `crossxnu_sched_dump`) и workqueue по сторожевому таймеру. Здесь же — хук в `bsd_init.c`, который просит OSKext загрузить `com.crossxnu.driver.CrossXnuRAMStorage` перед `com.apple.filesystems.apfs`, а также монтирует том APFS через `kernel_mount()` с флагом `KERNEL_MOUNT_BASESYSTEMROOT` (см. `docs/status.md` §11) |
 
 Существенные детали `0024` (проверены на живой загрузке, см. `docs/status.md`):
 

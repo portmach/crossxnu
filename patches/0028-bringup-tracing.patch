@@ -316,7 +316,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 index 949728f..74a44e9 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -481,6 +481,117 @@ bsd_rooted_ramdisk(void)
+@@ -481,6 +481,131 @@ bsd_rooted_ramdisk(void)
   * of the tro_ucred field so that the uthread structure can be
   * used like any other.
   */
@@ -366,7 +366,12 @@ index 949728f..74a44e9 100644
 + *
 + * kernel_mount() takes mount(2)'s extra indirection (a user_addr_t pointing at
 + * the device path), hence the address of the stack pointer, as imageboot.c
-+ * does for the base-system mount.
++ * does for the base-system mount.  KERNEL_MOUNT_BASESYSTEMROOT is not optional
++ * here: mount_common() answers EINVAL for a kernel mount of a VFC_VFSLOCALARGS
++ * filesystem unless VOLBYROLE_* or this bit is set, and never reaches APFS at
++ * all.  With the bit set, devpath is taken from kernel memory as a char **,
++ * fsmountargs becomes NULL, and APFS runs its container/root mount path
++ * (_container_rootmount) instead of parsing options.
 + */
 +void crossxnu_mount_apfs_volume(void);
 +
@@ -410,7 +415,16 @@ index 949728f..74a44e9 100644
 +				merr = kernel_mount("apfs", NULLVP, NULLVP,
 +				    mountpoints[m], devpathpp, 0,
 +				    (MNT_RDONLY | MNT_DONTBROWSE),
-+				    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
++				    (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT),
++				    vfs_context_kernel());
++				if (merr != 0) {
++					/* Retry read-write if read-only failed */
++					merr = kernel_mount("apfs", NULLVP, NULLVP,
++					    mountpoints[m], devpathpp, 0,
++					    MNT_DONTBROWSE,
++					    (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT),
++					    vfs_context_kernel());
++				}
 +
 +				printf("crossxnu: mount -t apfs %s %s -> %d\n",
 +				    candidates[c], mountpoints[m], merr);
