@@ -78,7 +78,51 @@ XNU), поэтому её правки не видны в `git -C upstream/xnu d
 
 ### Патчи kc-tools
 
-`patches/kc-tools/*.patch` применяются `scripts/build-kc-tools.sh` к копии submodule в `build/kc-tools-src`, поэтому закреплённый коммит PureDarwin остаётся чистым. Сейчас там один патч: всегда собирать prelink-слой, чтобы `__PRELINK_INFO` существовал даже для KC без kext'ов — иначе XNU уходит в `readBooterExtensions()` и остаётся без kext summary.
+`patches/kc-tools/*.patch` применяются `scripts/build-kc-tools.sh` к копии submodule в `build/kc-tools-src`, поэтому закреплённый коммит PureDarwin остаётся чистым.
+
+Важно: это **цепочка инкрементов**, а не набор снимков. Каждый патч собран
+как diff от состояния после предыдущего, поэтому `patch` применяет их строго
+по порядку имён. Долгое время они были снимками от закреплённого коммита
+(каждый содержал всё предыдущее), и последовательное применение падало на
+`0003` с `Hunk #2 FAILED` — то есть `build-kc-tools.sh` не мог собрать
+инструменты вообще. Пересобрать серию из рабочего дерева можно скриптом
+`tools/bringup/regen-kc-tools-patches.sh`: он восстанавливает деревья стадий,
+пересобирает диффы и требует, чтобы в `patches/kc-tools/` лежали именно
+снимки (иначе просит `git checkout -- patches/kc-tools/`).
+
+| Патч | Что делает |
+|:--|:--|
+| `0001` | всегда собирать prelink-слой, чтобы `__PRELINK_INFO` существовал даже для KC без kext'ов — иначе XNU уходит в `readBooterExtensions()` и остаётся без kext summary |
+| `0002` | применять релокации из `LC_DYSYMTAB` (`extreloff`/`locreloff`) — у слинкованных ld64 kext'ов `nreloc` в секциях обнулён |
+| `0003` | пересчитывать адрес через карту сегментов (`orig_va_to_foff`), а не как `va` — иначе `__kalloc_type` и строки классов читаются из мусора |
+| `0004` | вырезать `CFBundleExecutable` у codeless-kext'ов: с ним `OSKext` ищет исполняемый файл, получает NULL `kmod_info` и падает в `kext_get_vm_map` |
+| `0005` | вырезать ключ только когда значение рядом (иначе в plist остаётся висячий `<key>` и парсер обрывается) |
+| `0006` | локальные секционные релокации: `addend + load_vmaddr` вместо `target + addend`; плюс фикс вырезания из `0005` |
+| `0007` | связывать только срез целевой архитектуры и отказываться от `LC_DYLD_CHAINED_FIXUPS` (см. ниже) |
+
+`0007` появился после разбора паники `_strcmp +0x10` на virtio-наборе:
+`macho_view()` брал **первый 64-битный срез** fat-файла, а сиблинг
+`AppleVirtIOStorage` в KDK существует **только для arm64**. Ядро получало
+arm64-код и падало на первом вызове в kext'е, далеко от места ошибки. Теперь
+`link_kext()` берёт cputype ядра, выбирает соответствующий срез, а
+отсутствие такого среза (или `LC_DYLD_CHAINED_FIXUPS`, который линковщик не
+применяет) — это ошибка сборки, а не молча пропущенный kext:
+`kc-builder` печатает причину и завершает работу.
+
+Проверка обеих веток (arm64-only и chained fixups) без реального kext'а:
+
+```bash
+# arm64-only: AppleVirtIOStorage из KDK
+build/kc-tools/bin/kc-builder -kernel upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel \
+    -kext /tmp/kdkroot/System/Library/Extensions/AppleVirtIOStorage.kext -o /tmp/x.kc
+# chained fixups: синтетический образ из любого kext'а
+python3 tools/kext-loader/make-chainfix-sample.py \
+    build/hello-kext/com.crossxnu.hello.kext build/cf.kext
+build/kc-tools/bin/kc-builder -kernel upstream/xnu/BUILD/obj/RELEASE_X86_64/kernel \
+    -kext build/cf.kext -o /tmp/y.kc
+```
+
+Обе команды должны завершиться ошибкой `cannot be linked ... aborting`.
 
 ## 4. Как добавить патч
 

@@ -1,0 +1,325 @@
+diff --git a/include/linker.h b/include/linker.h
+index 17fa9e1..0b41d11 100644
+--- a/include/linker.h
++++ b/include/linker.h
+@@ -45,5 +45,12 @@ uint64_t macho_kernel_vm_end(const uint8_t *data, size_t size);
+ uint64_t macho_exec_vm_end(const uint8_t *data, size_t size);
+ 
+ int link_kext(const uint8_t *kext_data, size_t kext_size,
+-              const SymTable *combined_syms, uint64_t load_vmaddr,
+-              LinkedKext *out);
++              const SymTable *combined_syms, int32_t want_cputype,
++              uint64_t load_vmaddr, LinkedKext *out);
++
++// link_kext() failure kinds: a plain error is per-kext, but an unsupported
++// input (no slice for the target architecture, or a fixup style this linker
++// cannot apply) would silently produce a kext that faults at runtime, so the
++// caller must abort the whole collection instead of skipping it.
++#define LINK_ERR (-1)
++#define LINK_UNSUPPORTED (-2)
+diff --git a/include/macho_view.h b/include/macho_view.h
+index 474dc99..9732656 100644
+--- a/include/macho_view.h
++++ b/include/macho_view.h
+@@ -59,6 +59,16 @@ typedef struct {
+ // Parse a Mach-O (selecting a slice if it is fat). Returns 0 on success.
+ int macho_view(const uint8_t *data, size_t size, MachoView *mv);
+ 
++// As macho_view(), but require the slice to be of want_cputype (0 = any).
++// Returns MACHO_VIEW_NO_SLICE when no slice of that architecture exists.
++#define MACHO_VIEW_NO_SLICE (-2)
++int macho_view_for_cpu(const uint8_t *data, size_t size, MachoView *mv,
++                       int32_t want_cputype);
++
++// Arch of a Mach-O, so a caller can say which architecture a kext does and
++// does not provide before linking it.
++int macho_cputype(const uint8_t *data, size_t size, int32_t *out);
++
+ // The load command that begins a segment, for this image's width.
+ static inline uint32_t macho_lc_segment(const MachoView *mv) {
+   return mv->is64 ? LC_SEGMENT_64 : LC_SEGMENT;
+diff --git a/lib/linker.c b/lib/linker.c
+index 76e1b24..7c17a06 100644
+--- a/lib/linker.c
++++ b/lib/linker.c
+@@ -76,6 +76,10 @@ static int sym_cmp(const void *a, const void *b) {
+ #define LC_DYLD_INFO_ONLY (0x22 | 0x80000000)   // 0x22 | LC_REQ_DYLD
+ #endif
+ 
++#ifndef CPU_TYPE_I386
++#define CPU_TYPE_I386 7
++#endif
++
+ struct dyld_info_command {
+   uint32_t cmd;
+   uint32_t cmdsize;
+@@ -152,6 +156,32 @@ static const uint8_t *find_slice(const uint8_t *data, size_t size, size_t *out_s
+   return mv.base;
+ }
+ 
++static const char *cpu_name(int32_t cputype) {
++  switch (cputype) {
++  case CPU_TYPE_X86_64: return "x86_64";
++  case CPU_TYPE_ARM64:  return "arm64";
++  case CPU_TYPE_ARM:    return "arm";
++  case CPU_TYPE_I386:   return "i386";
++  default:              return "unknown";
++  }
++}
++
++/*
++ * Slice selection for the kext being linked.  Apple ships fat kexts whose
++ * first slice is arm64e plus at least one binary (AppleVirtIOStorage) that has
++ * no x86_64 code at all; taking the first 64-bit slice links code the target
++ * CPU cannot execute, which then shows up as a trap far away from the kext.
++ * Selecting by architecture turns that into a build error.
++ */
++static const uint8_t *find_slice_for_cpu(const uint8_t *data, size_t size,
++                                         int32_t want_cputype, size_t *out_sz) {
++  MachoView mv;
++  if (macho_view_for_cpu(data, size, &mv, want_cputype) != 0)
++    return NULL;
++  *out_sz = mv.size;
++  return mv.base;
++}
++
+ int symtab_build_from_macho(SymTable *st, const uint8_t *data, size_t size) {
+   size_t sl;
+   const uint8_t *s = find_slice(data, size, &sl);
+@@ -1029,32 +1059,43 @@ apply_dysymtab_relocations(uint8_t *buf, uint64_t linked_size,
+ 
+ int link_kext(const uint8_t *kext_data, size_t kext_size,
+               const SymTable *kernel_syms,
++              int32_t want_cputype,
+               uint64_t load_vmaddr,
+               LinkedKext *out)
+ {
+   size_t sl;
+-  const uint8_t *slice = find_slice(kext_data, kext_size, &sl);
++  const uint8_t *slice = find_slice_for_cpu(kext_data, kext_size,
++                                            want_cputype, &sl);
+   if (!slice) {
++    int32_t have = 0;
++    if (macho_cputype(kext_data, kext_size, &have) == 0 && want_cputype) {
++      fprintf(stderr,
++              "link_kext: no %s slice in this binary (it is %s); linking it "
++              "would emit code the target CPU cannot execute\n",
++              cpu_name(want_cputype), cpu_name(have));
++      return LINK_UNSUPPORTED;
++    }
+     fprintf(stderr, "link_kext: not a Mach-O\n");
+-    return -1;
++    return LINK_ERR;
+   }
+ 
+   uint8_t *buf = malloc(sl);
+   if (!buf)
+-    return -1;
++    return LINK_ERR;
+   memcpy(buf, slice, sl);
+ 
+   MachoView mv;
+   if (macho_view(buf, sl, &mv) != 0) {
+     fprintf(stderr, "link_kext: not a Mach-O\n");
+     free(buf);
+-    return -1;
++    return LINK_ERR;
+   }
+   const int is_arm32 = (mv.cputype == CPU_TYPE_ARM);
+ 
+   const struct symtab_command *symcmd = NULL;
+   const struct dysymtab_command *dysym = NULL;  // kext relocation tables
+   const uint8_t *dyld_info = NULL;   // LC_DYLD_INFO(_ONLY) command
++  int has_chained_fixups = 0;        // LC_DYLD_CHAINED_FIXUPS
+   OrigSeg  orig_segs[32];            // segment vmaddr/fileoff before relocation
+   uint32_t n_orig_segs = 0;
+   uint64_t orig_sec_addr[256];       // section vmaddrs before relocation
+@@ -1097,9 +1138,28 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
+       dysym = (const struct dysymtab_command *)lcp;
+     } else if (cmd == LC_DYLD_INFO || cmd == LC_DYLD_INFO_ONLY) {
+       dyld_info = lcp;
++    } else if (cmd == LC_DYLD_CHAINED_FIXUPS) {
++      has_chained_fixups = 1;
+     }
+   }
+ 
++  /*
++   * Chained fixups move rebases and binds out of LC_DYLD_INFO's opcode streams
++   * into per-page pointer chains encoded in the pointer words themselves.
++   * This linker applies rebase/bind opcodes and relocation tables only, so a
++   * chained image would keep every pointer in its encoded form and fault on
++   * first use.  Refuse it instead of emitting a kernel collection that traps.
++   */
++  if (has_chained_fixups) {
++    fprintf(stderr,
++            "link_kext: this image (%s) uses LC_DYLD_CHAINED_FIXUPS, which "
++            "kc-tools does not apply; refusing to emit a kext whose pointers "
++            "would stay encoded\n",
++            cpu_name(mv.cputype));
++    free(buf);
++    return LINK_UNSUPPORTED;
++  }
++
+   if (!symcmd) {
+     fprintf(stderr, "link_kext: no LC_SYMTAB\n");
+     free(buf);
+diff --git a/lib/macho_view.c b/lib/macho_view.c
+index 0586f6f..5db6ab7 100644
+--- a/lib/macho_view.c
++++ b/lib/macho_view.c
+@@ -13,7 +13,8 @@ static void copy_name(char *dst, const char *src, size_t n) {
+   dst[n] = '\0';
+ }
+ 
+-int macho_view(const uint8_t *data, size_t size, MachoView *mv) {
++int macho_view_for_cpu(const uint8_t *data, size_t size, MachoView *mv,
++                       int32_t want_cputype) {
+   if (!data || size < sizeof(struct mach_header) || !mv) {
+     return -1;
+   }
+@@ -33,6 +34,16 @@ int macho_view(const uint8_t *data, size_t size, MachoView *mv) {
+       if ((size_t)off + sz > size) {
+         continue;
+       }
++      /*
++       * A caller that knows its architecture must be given that architecture:
++       * Apple ships fat kexts whose first slice is arm64e, and silently
++       * linking the wrong slice produces a kernel collection whose kext code
++       * the target CPU cannot execute.
++       */
++      if (want_cputype &&
++          bswap32((uint32_t)fa[i].cputype) != (uint32_t)want_cputype) {
++        continue;
++      }
+       uint32_t m = *(const uint32_t *)(data + off);
+       if (m == MH_MAGIC_64) {
+         pick = &fa[i];
+@@ -43,7 +54,7 @@ int macho_view(const uint8_t *data, size_t size, MachoView *mv) {
+       }
+     }
+     if (!pick) {
+-      return -1;
++      return MACHO_VIEW_NO_SLICE;
+     }
+     s = data + bswap32(pick->offset);
+     ssize = bswap32(pick->size);
+@@ -74,12 +85,29 @@ int macho_view(const uint8_t *data, size_t size, MachoView *mv) {
+     return -1;
+   }
+ 
++  /* Thin image of the wrong architecture: report it as missing, not as bad. */
++  if (want_cputype && mv->cputype != want_cputype) {
++    return MACHO_VIEW_NO_SLICE;
++  }
++
+   mv->base = s;
+   mv->size = ssize;
+   mv->lc0 = s + mv->hdrsize;
+   return 0;
+ }
+ 
++int macho_view(const uint8_t *data, size_t size, MachoView *mv) {
++  return macho_view_for_cpu(data, size, mv, 0);
++}
++
++int macho_cputype(const uint8_t *data, size_t size, int32_t *out) {
++  MachoView mv;
++  if (macho_view(data, size, &mv) != 0)
++    return -1;
++  *out = mv.cputype;
++  return 0;
++}
++
+ int macho_is_segment(const MachoView *mv, const uint8_t *lc) {
+   return ((const struct load_command *)lc)->cmd == macho_lc_segment(mv);
+ }
+diff --git a/src/kc_builder.c b/src/kc_builder.c
+index 4a18299..54be326 100644
+--- a/src/kc_builder.c
++++ b/src/kc_builder.c
+@@ -5,6 +5,7 @@
+ #include <sys/stat.h>
+ 
+ #include "linker.h"
++#include "macho_view.h"
+ #include "plist.h"
+ #include "prelink.h"
+ 
+@@ -214,6 +215,16 @@ int main(int argc, char *argv[]) {
+   return 1;
+   fprintf(stderr, "kernel: %zu bytes\n", kernel_size);
+ 
++  // Kexts are linked for the kernel's architecture: a fat kext may put an
++  // arm64e slice first, and an arm64-only kext must be a build error rather
++  // than a kernel collection that traps on the first call into it.
++  int32_t kernel_cputype = 0;
++  if (macho_cputype(kernel_data, kernel_size, &kernel_cputype) != 0) {
++    fprintf(stderr, "kernel: not a Mach-O\n");
++    return 1;
++  }
++  fprintf(stderr, "kernel cputype: 0x%x\n", (unsigned)kernel_cputype);
++
+   SymTable ksyms = {0};
+   if (symtab_build_from_macho(&ksyms, kernel_data, kernel_size) != 0) {
+     fprintf(stderr, "Failed to build kernel symbol table\n");
+@@ -257,7 +268,16 @@ int main(int argc, char *argv[]) {
+     lk->info_plist_xml = kb->info_plist_xml;
+     lk->info_plist_len = kb->info_plist_len;
+ 
+-    if (link_kext(kb->binary, kb->binary_size, &ksyms, vmcursor, lk) != 0) {
++    int lrc = link_kext(kb->binary, kb->binary_size, &ksyms, kernel_cputype,
++                        vmcursor, lk);
++    if (lrc == LINK_UNSUPPORTED) {
++      // Skipping here would leave a collection that faults at runtime with the
++      // cause far from the missing kext, so stop and let the caller fix the set.
++      fprintf(stderr, "error: %s cannot be linked (%s); aborting\n",
++              kb->id, kb->bundle_path);
++      return 1;
++    }
++    if (lrc != 0) {
+       fprintf(stderr, "link_kext failed for %s (skipping)\n", kb->id);
+       continue;
+     }
+diff --git a/src/prelink_builder.c b/src/prelink_builder.c
+index d790bd6..944b0e1 100644
+--- a/src/prelink_builder.c
++++ b/src/prelink_builder.c
+@@ -5,6 +5,7 @@
+ #include <sys/stat.h>
+ 
+ #include "linker.h"
++#include "macho_view.h"
+ #include "plist.h"
+ #include "prelink.h"
+ 
+@@ -203,6 +204,14 @@ int main(int argc, char *argv[]) {
+   return 1;
+   fprintf(stderr, "kernel: %zu bytes\n", kernel_size);
+ 
++  // Kexts are linked for the kernel's architecture, so a fat kext's arm64e
++  // slice is never picked in place of its x86_64 one.
++  int32_t kernel_cputype = 0;
++  if (macho_cputype(kernel_data, kernel_size, &kernel_cputype) != 0) {
++    fprintf(stderr, "kernel: not a Mach-O\n");
++    return 1;
++  }
++
+   SymTable ksyms = {0};
+   if (symtab_build_from_macho(&ksyms, kernel_data, kernel_size) != 0) {
+     fprintf(stderr, "Failed to build kernel symbol table\n");
+@@ -246,7 +255,14 @@ int main(int argc, char *argv[]) {
+     lk->info_plist_xml = kb->info_plist_xml;
+     lk->info_plist_len = kb->info_plist_len;
+ 
+-    if (link_kext(kb->binary, kb->binary_size, &ksyms, vmcursor, lk) != 0) {
++    int lrc = link_kext(kb->binary, kb->binary_size, &ksyms, kernel_cputype,
++                        vmcursor, lk);
++    if (lrc == LINK_UNSUPPORTED) {
++      fprintf(stderr, "error: %s cannot be linked (%s); aborting\n",
++              kb->id, kb->bundle_path);
++      return 1;
++    }
++    if (lrc != 0) {
+       fprintf(stderr, "link_kext failed for %s (skipping)\n", kb->id);
+       continue;
+     }

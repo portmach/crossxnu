@@ -1028,3 +1028,100 @@ python3 tools/kext-loader/make-codeless-stubs.py build/codeless-stubs \
 2. Убрать диагностику `strnlen` (или оставить под boot-arg), перенести патчи
    `OSKext.cpp`/`subrs.c` в серию `patches/` (сейчас в рабочем дереве).
 3. Проверить, монтируется ли APFS-образ (нужен валидный APFS-том в QEMU).
+
+## 10. Chained fixups: проверено, что они не нужны; virtio закрыт (2026-10-31)
+
+Планировалась поддержка `LC_DYLD_CHAINED_FIXUPS` в `kc-tools` как
+«разблокировщик всего KDK». Проверка показала, что профита нет, а причина
+паники на virtio-наборе была другая.
+
+### 10.1 Замеры по KDK 26.7.2 (718 kext'ов)
+
+`tools/kext-loader/kdk-slice-scan.py /tmp/kdkroot/System/Library/Extensions --summary`:
+
+```
+{'has-x86_64': 275, 'arm64-only': 443}
+```
+
+То есть 443 kext'а вообще не содержат x86_64-кода. Отдельно:
+
+```
+$ kdk-slice-scan.py ... --chainfix          # x86_64 kexts using chained fixups
+(пусто)
+```
+
+**Ни один x86_64-kext в KDK не использует chained fixups.** Они есть только в
+arm64e-срезах (формат указателей 7 = `ARM64E_KERNEL`), которые мы всё равно
+не можем исполнить. Все 275 x86_64-kext'ов собраны либо с классическими
+релокациями (то, что мы уже применяем через `LC_DYSYMTAB`), либо (реже) с
+`LC_DYLD_INFO`-opcode'ами, которые линковщик тоже обрабатывает. Так что
+поддержка chainfix была бы мёртвым кодом.
+
+### 10.2 Почему падал virtio-набор
+
+`AppleVirtIOStorage` — **arm64-only** kext:
+
+```
+$ tools/kext-loader/chainfix-info.py .../AppleVirtIOStorage.kext/Contents/MacOS/AppleVirtIOStorage
+file:            .../AppleVirtIOStorage
+slice base:      0x0  size 0x57c90  is64=1
+segments:        5
+  [0] __TEXT           vmaddr 0x0000000000000000 ...
+  ...
+  seg[2] __DATA       size 24   page_size 0x1000  format 7 (ARM64E_KERNEL)
+```
+
+`macho_view()` брал первый 64-битный срез, поэтому в KC попадал arm64-код, и
+ядро падало на первом вызове в kext'е (`_strcmp +0x10`, GP). Отсюда и
+подозрение на chained fixups: они действительно были в том срезе, но
+исполнять его всё равно нельзя.
+
+Итого путь «virtio-blk + `AppleVirtIOStorage`» закрыт: у Apple нет x86_64
+сборки этого kext'а. `AppleVirtIO` и `IOPCIFamily` — двойные (x86_64+arm64),
+`AppleVirtIOStorage` — нет.
+
+### 10.3 Что сделано вместо chainfix
+
+`patches/kc-tools/0007`:
+
+* `link_kext()` получает cputype ядра и выбирает срез по архитектуре
+  (`macho_view_for_cpu`), а не первый 64-битный;
+* отсутствие нужного среза и `LC_DYLD_CHAINED_FIXUPS` — это
+  `LINK_UNSUPPORTED`, и `kc-builder` **прерывает сборку** с внятным текстом,
+  а не пропускает kext молча (иначе получается KC, который падает далеко от
+  причины);
+* проверка воспроизводится без реального kext'а:
+  `tools/kext-loader/make-chainfix-sample.py`.
+
+Заодно починена серия `patches/kc-tools/`: она была набором снимков, а не
+цепочкой инкрементов, поэтому `scripts/build-kc-tools.sh` не мог применить
+её целиком (`Hunk #2 FAILED` на `0003`). Пересборка —
+`tools/bringup/regen-kc-tools-patches.sh`; применение с нуля сверено с
+эталонным деревом, а сборка APFS-набора даёт побайтово тот же KC, что и до
+патча.
+
+### 10.4 Настоящий блокер: APFS нужен `IOMedia`
+
+`apfs` грузится и стартует, но монтировать ему нечего: нужен `IOMedia` от
+драйвера-провайдера. В KDK все провайдеры (`IOAHCIFamily`+`AppleAHCIPort`,
+`IONVMeFamily`, `IOUSBMassStorageDriver`, `IOSCSIArchitectureModelFamily`)
+висят на `IOPCIDevice`, а корневой PCI-мост публикует `AppleACPIPlatform`
+(класс `AppleACPIPCI`); в самом XNU ни ACPI, ни PCI-перечисления нет.
+Символьное замыкание `IONVMeFamily` при этом маленькое и всё x86_64
+(8 kext'ов: `IONVMeFamily`, `IOPCIFamily`, `IOStorageFamily`,
+`AppleMobileFileIntegrity`, `CoreTrust`, `CoreAnalyticsFamily`,
+`AppleImage4`, `corecrypto`), а вот `AppleACPIPlatform` тянет arm64-only
+`AppleARMPlatform` и 34 неразрешённых символа (`_PE_arm_debug_panic_hook`,
+`_PAGE_SHIFT_CONST`, `IONVRAMController::*`, `*_RESERVED*`).
+
+Варианты (по возрастанию стоимости):
+
+1. **Свой kext-«rammedia»**: `IOMedia` над буфером в памяти, который
+   загрузчик уже умеет читать (`ramdisk.img`) — без PCI/ACPI. Блокер:
+   нет `IOKit/storage/IOMedia.h` и `IOStorage.h` (их нет ни в XNU, ни в KDK,
+   ни в нашем синтетическом SDK) — нужны заголовки из macOS SDK/Kernel.framework.
+2. **NVMe/AHCI через PCI**: нужен работающий `AppleACPIPlatform`
+   (ACPI-таблицы, platform expert) — отдельный крупный проект.
+3. **Другой KDK** (старше, где есть x86_64-варианты нужных kext'ов) — не
+   решает проблему `IOMedia`, только набор драйверов.
+
