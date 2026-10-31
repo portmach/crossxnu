@@ -972,3 +972,59 @@ RIP: 0xffffff800038be54 -> _vm_pre_fault_with_info +0x1a4  (via _vm_fault)
    понять, зависит ли паника от раскладки, а не от содержимого kext'а.
 3. Отдельно починить EFI-загрузчик: KC без `__PRELINK_TEXT` (codeless)
    сейчас отвергается как «Compromised Data».
+
+## 9. Официальный APFS загружен и запущен (2026-10-31)
+
+Итог длинной цепочки: **Apple APFS из KDK 26.7.2 слинкован нашим
+`kc-builder` и запущен в нашем ядре.**
+
+```
+apfs_module_start:3724: load: com.apple.filesystems.apfs, v2811.160.7,
+                        apfs-2811.160.7.702.4, 2026/10/11
+Kext com.apple.filesystems.apfs is now started.
+Kext com.apple.filesystems.apfs loaded.
+```
+
+Классы IOKit зарегистрированы (`AppleAPFSContainer`, `AppleAPFSContainerScheme`,
+`AppleAPFSSnapshot`, `AppleAPFSGraft`, `AppleAPFSMediaBSDClient`), паники нет,
+загрузка доходит до launchd.
+
+### 9.1 Что понадобилось (сводка по слоям)
+
+| Слой | Проблема | Решение |
+|:--|:--|:--|
+| Источник | в KC у всех kext'ов `extrel=locrel=0` | KDK 26.7.2: `apfs.kext` с релокациями (`extrel=14055`) |
+| Упаковка KDK | DMG → HFS → xar → pbzx со stored-блоками | `tools/kext-loader/kdk-payload-decode.py` |
+| kc-tools | `LC_DYSYMTAB`-релокации не применялись | `patches/kc-tools/0002` |
+| kc-tools | file offset считался как `va`, ломая `__kalloc_type` | `0003` (карта сегментов) |
+| kc-tools | codeless-kext'ы с `CFBundleExecutable` → NULL `kmod_info` | `0004` (вырезание ключа) |
+| kc-tools | вырезание оставляло висячий `<key>` → plist обрывался | `0005`, `0006` |
+| kc-tools | локальные релокации в секциях: `target+addend` | `0006` (`addend+load_vmaddr`) |
+| ядро | `dep_kmod->reference_count++` при NULL `kmod_info` у codeless-зависимостей | патч `OSKext.cpp` (пропуск) |
+| ядро | `strnlen(NULL, …)` из kext'а при старте | диагностика в `strnlen_impl` (возврат 0) |
+| KC | `OSBundleLibraries_x86_64` у apfs требует `AppleEFINVRAM` | синтетический codeless-stub (`make-codeless-stubs.py`) |
+
+### 9.2 Порядок сборки
+
+```bash
+K=/tmp/kdkroot/System/Library/Extensions     # распакованный KDK
+python3 tools/kext-loader/make-codeless-stubs.py build/codeless-stubs \
+    $K/corecrypto.kext $K/AppleImage4.kext $K/AppleEffaceableStorage.kext \
+    $K/IOStorageFamily.kext $K/CoreAnalyticsFamily.kext $K/apfs.kext \
+    $K/CoreTrust.kext $K/IOCryptoAcceleratorFamily.kext
+./scripts/build-fileset.sh \
+    --kext $K/corecrypto.kext --kext $K/AppleImage4.kext \
+    --kext $K/AppleEffaceableStorage.kext --kext $K/IOStorageFamily.kext \
+    --kext $K/CoreAnalyticsFamily.kext --kext $K/apfs.kext \
+    --kext build/hello-kext/com.crossxnu.hello.kext \
+    --codeless $K/CoreTrust.kext --codeless $K/IOCryptoAcceleratorFamily.kext \
+    --codeless build/codeless-stubs/AppleEFINVRAM.kext --with-kpi
+```
+
+### 9.3 Что дальше
+
+1. Поднять `/System/Volumes` и дождаться, пока launchd увидит APFS-тома с
+   ролями (System/Data/Preboot) — см. §7.
+2. Убрать диагностику `strnlen` (или оставить под boot-arg), перенести патчи
+   `OSKext.cpp`/`subrs.c` в серию `patches/` (сейчас в рабочем дереве).
+3. Проверить, монтируется ли APFS-образ (нужен валидный APFS-том в QEMU).

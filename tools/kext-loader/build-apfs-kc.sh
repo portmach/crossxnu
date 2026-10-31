@@ -31,4 +31,15 @@ for k in "${kexts[@]}"; do
     args+=(--kext "${k}")
 done
 
+# apfs also declares OSBundleLibraries on libraries that provide no symbols it
+# imports (personality-only dependencies), so they are not in the symbol
+# closure: add them as codeless entries so OSKext can resolve them.
+for c in AppleEFINVRAM IOCryptoAcceleratorFamily CoreTrust; do
+    if [[ -d "${KDK_EXT}/${c}.kext" ]]; then
+        args+=(--codeless "${KDK_EXT}/${c}.kext")
+    else
+        echo "warning: ${c}.kext missing from KDK" >&2
+    fi
+done
+
 exec "${SCRIPT_DIR}/../../scripts/build-fileset.sh" "${args[@]}" --with-kpi
