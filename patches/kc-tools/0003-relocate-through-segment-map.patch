@@ -1,31 +1,11 @@
 diff --git a/lib/linker.c b/lib/linker.c
-index 102e429..70d7008 100644
+index 7050082..70d7008 100644
 --- a/lib/linker.c
 +++ b/lib/linker.c
-@@ -913,6 +913,120 @@ static uint64_t find_defined_kmod_info(
-     return 0;
- }
- 
-+/*
-+ * Relocations of a kext live in LC_DYSYMTAB, not in the section headers.
-+ * ld64 fills in the external and local relocation tables and leaves every
-+ * section's nreloc at 0, so the per-section pass in link_kext() never sees a
-+ * single entry.  Left unapplied, an external branch keeps the addend-only
-+ * encoding (e8 00 00 00 00, i.e. "call the next instruction") and local
-+ * pointer slots keep bare __text offsets.
-+ *
-+ * dyld applies these entries as "value + slide".  We instead re-link the
-+ * kext at a different vmbase, so each entry needs the fully relocated value:
-+ *
-+ *   extern + UNSIGNED : slot = symbol_va + addend
-+ *   extern + pcrel    : slot = symbol_va - (pc + 4 + extra) + addend
-+ *   local  + UNSIGNED : slot = slot + (delta applied to every section)
-+ *   local  + pcrel    : slot = target_section_va - (pc + 4 + extra) + addend
-+ *
-+ * r_address is an offset in the image's original vmaddr space, therefore
-+ *   file offset = r_address - text_vmaddr + text_fileoff
-+ *   pc          = r_address + load_vmaddr
-+ */
+@@ -933,12 +933,27 @@ static uint64_t find_defined_kmod_info(
+  *   file offset = r_address - text_vmaddr + text_fileoff
+  *   pc          = r_address + load_vmaddr
+  */
 +typedef struct { uint64_t vm; uint64_t foff; uint64_t fsize; } OrigSeg;
 +
 +/* r_address is in the image's original vmaddr space; convert it with the
@@ -41,136 +21,62 @@ index 102e429..70d7008 100644
 +  return UINT64_MAX;
 +}
 +
-+static void
-+apply_dysymtab_relocations(uint8_t *buf, uint64_t linked_size,
-+    const struct dysymtab_command *dysym,
-+    const uint64_t *sym_addrs, uint32_t nsyms,
-+    const uint64_t *orig_sec_addr, uint32_t total_sects,
+ static void
+ apply_dysymtab_relocations(uint8_t *buf, uint64_t linked_size,
+     const struct dysymtab_command *dysym,
+     const uint64_t *sym_addrs, uint32_t nsyms,
+     const uint64_t *orig_sec_addr, uint32_t total_sects,
+-    uint64_t load_vmaddr, uint64_t text_vmaddr, uint64_t text_fileoff)
 +    uint64_t load_vmaddr, const OrigSeg *segs, uint32_t nsegs)
-+{
-+  if (!dysym)
-+    return;
-+
-+  const uint32_t table_off[2] = { dysym->extreloff, dysym->locreloff };
-+  const uint32_t table_cnt[2] = { dysym->nextrel, dysym->nlocrel };
-+
-+  for (int t = 0; t < 2; t++) {
-+    if (table_cnt[t] == 0 || table_off[t] == 0)
-+      continue;
-+    if ((uint64_t)table_off[t] + (uint64_t)table_cnt[t] * sizeof(struct relocation_info) > linked_size)
-+      continue;
-+
-+    const struct relocation_info *relocs =
-+      (const struct relocation_info *)(buf + table_off[t]);
-+    for (uint32_t i = 0; i < table_cnt[t]; i++) {
-+      struct relocation_info r = relocs[i];
-+      uint64_t va = (uint64_t)(uint32_t)r.r_address;
+ {
+   if (!dysym)
+     return;
+@@ -957,11 +972,11 @@ apply_dysymtab_relocations(uint8_t *buf, uint64_t linked_size,
+     for (uint32_t i = 0; i < table_cnt[t]; i++) {
+       struct relocation_info r = relocs[i];
+       uint64_t va = (uint64_t)(uint32_t)r.r_address;
+-      uint64_t foff = va - text_vmaddr + text_fileoff;
 +      uint64_t foff = orig_va_to_foff(segs, nsegs, va);
-+      uint64_t pc = va + load_vmaddr;
-+      uint64_t target = 0;
-+
-+      if (foff == UINT64_MAX || foff + 8 > linked_size)
-+        continue;
-+
-+      uint8_t *loc = buf + foff;
-+
-+      if (r.r_extern) {
-+        if (r.r_symbolnum >= nsyms)
-+          continue;
-+        target = sym_addrs[r.r_symbolnum];
-+        if (!target)
-+          continue;               /* unresolved kernel symbol */
-+      } else {
-+        uint32_t si = r.r_symbolnum;
-+        if (si < 1 || si > total_sects)
-+          continue;
-+        target = orig_sec_addr[si - 1] + load_vmaddr;
-+      }
-+
-+      switch (r.r_type) {
-+      case X86_64_RELOC_UNSIGNED: {
-+        uint64_t addend = (r.r_length == RL_QUAD) ? r64(loc) : (uint64_t)(uint32_t)r32(loc);
-+        uint64_t val = r.r_extern ? target + addend : addend + load_vmaddr;
-+        if (r.r_length == RL_QUAD)
-+          w64(loc, val);
-+        else
-+          w32(loc, (uint32_t)val);
-+        break;
-+      }
-+      case X86_64_RELOC_SIGNED:
-+      case X86_64_RELOC_BRANCH:
-+      case X86_64_RELOC_GOT_LOAD:
-+      case X86_64_RELOC_GOT:
-+      case X86_64_RELOC_SIGNED_1:
-+      case X86_64_RELOC_SIGNED_2:
-+      case X86_64_RELOC_SIGNED_4: {
-+        int extra = (r.r_type == X86_64_RELOC_SIGNED_1) ? 1 :
-+                    (r.r_type == X86_64_RELOC_SIGNED_2) ? 2 :
-+                    (r.r_type == X86_64_RELOC_SIGNED_4) ? 4 : 0;
-+        int64_t addend = (int32_t)r32(loc);
-+        int64_t rel = (int64_t)target - (int64_t)(pc + 4 + extra) + addend;
-+        w32(loc, (uint32_t)(int32_t)rel);
-+        break;
-+      }
-+      default:
-+        /* SUBTRACTOR needs its pair; kexts from ld64 do not use it here. */
-+        break;
-+      }
-+    }
-+  }
-+}
-+
- int link_kext(const uint8_t *kext_data, size_t kext_size,
-               const SymTable *kernel_syms,
-               uint64_t load_vmaddr,
-@@ -939,7 +1053,12 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
-   const int is_arm32 = (mv.cputype == CPU_TYPE_ARM);
+       uint64_t pc = va + load_vmaddr;
+       uint64_t target = 0;
  
+-      if (foff + 8 > linked_size)
++      if (foff == UINT64_MAX || foff + 8 > linked_size)
+         continue;
+ 
+       uint8_t *loc = buf + foff;
+@@ -1040,8 +1055,8 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
    const struct symtab_command *symcmd = NULL;
-+  const struct dysymtab_command *dysym = NULL;  // kext relocation tables
+   const struct dysymtab_command *dysym = NULL;  // kext relocation tables
    const uint8_t *dyld_info = NULL;   // LC_DYLD_INFO(_ONLY) command
+-  uint64_t text_vmaddr = 0;          // first segment, for r_address -> file
+-  uint64_t text_fileoff = 0;
 +  OrigSeg  orig_segs[32];            // segment vmaddr/fileoff before relocation
 +  uint32_t n_orig_segs = 0;
-+  uint64_t orig_sec_addr[256];       // section vmaddrs before relocation
-+  uint32_t n_orig_sec = 0;
+   uint64_t orig_sec_addr[256];       // section vmaddrs before relocation
+   uint32_t n_orig_sec = 0;
    SegInfo seginfo[32];
-   uint32_t nseginfo = 0;
- 
-@@ -956,8 +1075,16 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
-         uint8_t *sp = secs + (size_t)j * macho_sect_size(&mv);
-         MachoSect sec;
-         macho_sect_get(&mv, sp, &sec);
-+        if (n_orig_sec < sizeof(orig_sec_addr) / sizeof(orig_sec_addr[0]))
-+          orig_sec_addr[n_orig_sec++] = sec.addr;
+@@ -1064,9 +1079,11 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
+           orig_sec_addr[n_orig_sec++] = sec.addr;
          macho_sect_set(&mv, sp, sec.addr + load_vmaddr, sec.offset, sec.reloff);
        }
+-      if (nseginfo == 0) {
+-        text_vmaddr = sg.vmaddr;
+-        text_fileoff = sg.fileoff;
 +      if (n_orig_segs < 32) {
 +        orig_segs[n_orig_segs].vm = sg.vmaddr;
 +        orig_segs[n_orig_segs].foff = sg.fileoff;
 +        orig_segs[n_orig_segs].fsize = sg.filesize;
 +        n_orig_segs++;
-+      }
+       }
        if (nseginfo < 32) {
          seginfo[nseginfo].fileoff = sg.fileoff;
-         seginfo[nseginfo].vmaddr = sg.vmaddr;
-@@ -966,6 +1093,8 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
-       }
-     } else if (cmd == LC_SYMTAB) {
-       symcmd = (const struct symtab_command *)lcp;
-+    } else if (cmd == LC_DYSYMTAB) {
-+      dysym = (const struct dysymtab_command *)lcp;
-     } else if (cmd == LC_DYLD_INFO || cmd == LC_DYLD_INFO_ONLY) {
-       dyld_info = lcp;
-     }
-@@ -1220,6 +1349,11 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
-   if (nerrs)
-     fprintf(stderr, "  link_kext: %u unresolved symbols\n", nerrs);
- 
-+  /* Keeps ld64's LC_DYSYMTAB relocation tables from being ignored. */
-+  apply_dysymtab_relocations(buf, sl, dysym,
-+      sym_addrs, nsyms, orig_sec_addr, n_orig_sec,
+@@ -1335,7 +1352,7 @@ int link_kext(const uint8_t *kext_data, size_t kext_size,
+   /* Keeps ld64's LC_DYSYMTAB relocation tables from being ignored. */
+   apply_dysymtab_relocations(buf, sl, dysym,
+       sym_addrs, nsyms, orig_sec_addr, n_orig_sec,
+-      load_vmaddr, text_vmaddr, text_fileoff);
 +      load_vmaddr, orig_segs, n_orig_segs);
-+
+ 
    if (dyld_info && nseginfo) {
      const struct dyld_info_command *di = (const struct dyld_info_command *)dyld_info;
- 
