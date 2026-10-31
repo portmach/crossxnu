@@ -703,3 +703,73 @@ System/Library/CoreServices/SystemVersion.plist
 Что понадобится для следующего шага: APFS-драйвер в ядре (или загрузка
 `AppleAPFS.kext` из payload'а, что требует рабочего KEXT-загрузчика, IOKit и
 `libkern`), и уже на нём — минимальный APFS-том с ролями System/Data.
+
+## 8. Kext-загрузчик: что выяснено (2026-10-31)
+
+Цель блока — проверить, что наш порт умеет загрузить сторонний kext, прежде
+чем браться за `AppleAPFS.kext`. Собран минимальный kext
+`tools/hello-kext` (`com.crossxnu.hello`), который в `start()` печатает
+строку в консоль.
+
+### 8.1 Динамической загрузки kext'ов в xnu-12377 нет
+
+`kxld` в этой версии **не собирается**:
+
+- `libkern/RELEASE/config_kxld.h` содержит `#define NCONFIG_KXLD 0`;
+- `options CONFIG_KXLD` есть в `config/MASTER` (строка 541), но **ни одна**
+  группа (`RELEASE`/`DEVELOPMENT`/`DEBUG`) его не перечисляет, поэтому в
+  `CONFIG_DEFINES` его нет и `libkern/kxld/*.c` (`optional config_kxld`) в
+  сборку не попадают;
+- соответственно `OSKext::loadFromMkext`, `loadKextWithIdentifier` для
+  не-prelinked kext'ов и `kextd`-протокол вырезаны препроцессором.
+
+Вывод: единственный поддерживаемый в этой XNU путь — **prelinked kext из
+kernel collection** (`__PRELINK_TEXT` + `__PRELINK_INFO`). Именно так macOS
+загружает и `AppleAPFS.kext`, так что для APFS нужен не свой kxld, а сборка
+и загрузка KC/AuxKC.
+
+### 8.2 kext собирается и линкуется в KC
+
+- `build/dis/build-hello-kext.py` берёт аргументы компиляции из
+  `compile_commands.json` ядра (включая `-DKERNEL -DMACH_KERNEL_PRIVATE` и
+  все `-I EXPORT_HDRS/...`) и линкует `ld64 -kext -undefined dynamic_lookup`.
+  Важно: подключать `<sys/systm.h>` нельзя — экспортированные bsd-заголовки
+  смешивают kernel- и userland-версии `<sys/types.h>`, и на `clock_t`/
+  `int32_t` всё падает. Минимальный рабочий набор — `<mach/kmod.h>` +
+  `<kern/misc_protos.h>` (проверяется `build/dis/probe-kext-includes.py`).
+- `kc-builder` линкует kext против таблицы символов ядра (24 265 символов),
+  патчит `kmod_info` и кладёт код в `__PRELINK_TEXT`; `build/hello.kc`
+  (MH_FILESET, 17 207 296 байт) грузится **нашим же EFI-загрузчиком** и ядро
+  стартует с него так же, как с обычного `MH_EXECUTE`.
+
+### 8.3 Найденные баги kc-tools
+
+1. `kmod_info.start/stop` оставались «голыми» смещениями (`0xf50`, `0xf70`):
+   ld64 оформляет их локальными релокациями, а `link_kext` перебазирует
+   только внешние символы. OSKext отказывался стартовать kext
+   (`module start pointer is outside of kext range` →
+   `kOSKextReturnInternalError`). Фикс — `patches/kc-tools/0002-*`,
+   генератор `build/dis/fix-kc-tools-kmod-start.py`.
+2. Остаётся: `call printf` внутри текста kext'а после линковки имеет
+   `rel32 = 0` (`e8 00 00 00 00`), то есть BRANCH-релокация на внешний
+   символ не применяется; из-за этого kext «стартует», но паникует на
+   возврате/вызове (`Data/Stack execution not permitted`). Это следующий
+   баг kc-tools, который надо закрыть до APFS.
+
+### 8.4 Что уже подтверждено в рантайме
+
+- Kext из `__PRELINK_INFO` регистрируется: `Kext com.crossxnu.hello, v1.0
+  registered and available for loading`.
+- Хук в `bsd_init()` (`OSKextLoadKextWithIdentifier`) доводит загрузку до
+  `calling module start function` — то есть путь prelinked-kext'а в нашем
+  ядре работает.
+- `com.apple.kpi.*` приходится добавлять в KC как codeless-kext'ы
+  (`scripts/build-fileset.sh --with-kpi`), иначе зависимости не разрешаются.
+
+### 8.5 Следующие шаги
+
+1. Починить BRANCH-релокации внешних символов в `link_kext` (kc-tools) —
+   после этого `hello.kext` должен реально печатать строку.
+2. Собрать Aux/Pageable-KC из реального `AppleAPFS.kext`, извлечённого из
+   `BootKernelExtensions.kc` (kc-tools умеет только собирать, экстрактора
+   нет — писать свой), и загрузить его тем же путём.

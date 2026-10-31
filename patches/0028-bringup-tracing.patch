@@ -312,6 +312,37 @@ index a352414..01b0da3 100644
  #if CONFIG_MACF
  skip_syscall:
  #endif /* CONFIG_MACF */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 949728f..68fed31 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1065,6 +1065,26 @@ bsd_init(void)
+ 	}
+ #endif
+ 
++	/*
++	 * crossxnu: load our validation kext out of the primary kernel
++	 * collection.
++	 *
++	 * Kexts that come from a prelinked collection are only *registered* at
++	 * boot ("registered and available for loading"); something has to ask
++	 * for them.  On real macOS that is the IOCatalogue matching a
++	 * personality, or kextd pushing a load request.  Our synthetic
++	 * collection has no personalities at all, so ask for the kext by
++	 * identifier explicitly.
++	 */
++	{
++		extern kern_return_t OSKextLoadKextWithIdentifier(const char *bundle_id);
++		kern_return_t crossxnu_kr;
++
++		crossxnu_kr = OSKextLoadKextWithIdentifier("com.crossxnu.hello");
++		bsd_init_kprintf("crossxnu: OSKextLoadKextWithIdentifier("
++		    "com.crossxnu.hello) -> %d\n", crossxnu_kr);
++	}
++
+ #if 0 /* not yet */
+ 	consider_zone_gc(FALSE);
+ #endif
 diff --git a/bsd/kern/kern_fork.c b/bsd/kern/kern_fork.c
 index 1d8db27..a07b8d1 100644
 --- a/bsd/kern/kern_fork.c
