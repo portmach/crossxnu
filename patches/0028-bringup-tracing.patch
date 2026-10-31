@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/i386/systemcalls.c b/bsd/dev/i386/systemcalls.c
-index a352414..eb73d04 100644
+index a352414..f0b4726 100644
 --- a/bsd/dev/i386/systemcalls.c
 +++ b/bsd/dev/i386/systemcalls.c
-@@ -59,6 +59,163 @@
+@@ -59,6 +59,216 @@
  
  #if CONFIG_MACF
  #include <security/mac_framework.h>
@@ -75,6 +75,45 @@ index a352414..eb73d04 100644
 +    size_t *done);
 +extern const char *syscallnames[];
 +
++/*
++ * crossxnu: dump the payload of pid 1's write() calls, escaped to printable
++ * ASCII, so launchd's own log text survives the (in-memory) ramdisk.
++ */
++static void
++crossxnu_trace_write(struct proc *p, int code, uint64_t *arg)
++{
++	static int nwrite;
++	static char buf[2048];
++	uint64_t fd = arg[0];
++	uint64_t len = arg[2];
++	size_t n, i;
++
++	if (p->p_pid != 1 || nwrite >= 400) {
++		return;
++	}
++	if (arg[1] == 0 || len == 0) {
++		return;
++	}
++	n = (size_t)(len > sizeof(buf) - 1 ? sizeof(buf) - 1 : len);
++	if (copyin((user_addr_t)arg[1], buf, n) != 0) {
++		return;
++	}
++	nwrite++;
++	for (i = 0; i < n; i++) {
++		unsigned char c = (unsigned char)buf[i];
++
++		if (c == '\n' || c == '\t') {
++			continue;
++		}
++		if (c < 0x20 || c >= 0x7f) {
++			buf[i] = '.';
++		}
++	}
++	buf[n] = '\0';
++	printf("crossxnu: p1 write fd=%llu n=%llu <%s>\n",
++	    (unsigned long long)fd, (unsigned long long)len, buf);
++}
++
 +static int
 +crossxnu_path_has_launch(const char *s)
 +{
@@ -106,6 +145,20 @@ index a352414..eb73d04 100644
 +	 */
 +	if (p->p_pid != 1 && p->p_ppid != 1) {
 +		return;
++	}
++	/*
++	 * crossxnu: dump what launchd writes.  Its own log file
++	 * (/private/var/log/com.apple.xpc.launchd/launchd.log) lives in the
++	 * ramdisk and is lost after the boot, so the text has to be captured on
++	 * the way into the kernel.
++	 */
++	switch (code) {
++	case 4:         /* write */
++	case 397:       /* write_nocancel */
++		crossxnu_trace_write(p, code, arg);
++		return;
++	default:
++		break;
 +	}
 +	switch (code) {
 +	case 12:        /* chdir */
@@ -166,7 +219,7 @@ index a352414..eb73d04 100644
  #endif
  
  #if CONFIG_DTRACE
-@@ -308,6 +465,7 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -308,6 +518,7 @@ unix_syscall64(x86_saved_state_t *state)
  
  	code    = regs->rax & SYSCALL_NUMBER_MASK;
  	syscode = (code < nsysent) ? code : SYS_invalid;
@@ -174,7 +227,7 @@ index a352414..eb73d04 100644
  	DEBUG_KPRINT_SYSCALL_UNIX(
  		"unix_syscall64: code=%d(%s) rip=%llx\n",
  		code, syscallnames[syscode], regs->isf.rip);
-@@ -360,6 +518,9 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -360,6 +571,9 @@ unix_syscall64(x86_saved_state_t *state)
  		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
  	}
  

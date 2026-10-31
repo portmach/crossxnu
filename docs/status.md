@@ -539,3 +539,64 @@ launchd с полным набором доменов. Поэтому ожида
 **системный** launchd с настоящим деревом заданий — то есть переход к
 «инсталлированному» root'у (пусть и минимальному, собранному руками), а не
 к recovery-огрызку.
+
+### Собственный лог launchd (2026-10-31)
+
+Файл `/private/var/log/com.apple.xpc.launchd/launchd.log` живёт в ramdisk и
+после загрузки теряется, поэтому добавлена трассировка `write`/`write_nocancel`
+для pid 1 (первые 400 записей, до 2 КБ на запись, непечатаемое → `.`).
+Что launchd пишет сам:
+
+```
+(pid 1)  <Notice>: hello, launchd UUID: ...
+         <Notice>: Darwin Bootstrapper Version 7.0.0: ... /launchd/RELEASE_X86_64
+         <Notice>: boot-args = -v serial=1 -ignition_level 0
+         <Notice>: System Integrity Protection is engaged.
+         <Error>:  assertion failed: 99Z999: launchd.real + 60817 [<uuid>]: 0xffffffffffffffff
+(system) <Notice>: entering ondemand mode
+(system) <Notice>: created
+         <Notice>: failed to find AppleKeyStore service
+(detect-installed-roots) <Notice>: No cookie from system volume
+         <Notice>: No cookie: /System/Volumes/Preboot/<uuid>/.roots-installed
+         <Notice>: No cookie: /System/Volumes/iSCPreboot/<uuid>/.roots-installed
+(select-boot-mode) <Error>: fsctl(APFSIOC_GET_DEV_BY_ROLE) error: 2
+(commit-boot-mode) <Notice>: boot-mode committed: (null)
+(allow-non-platform-code) <Notice>: allowing non-platform code now
+(sandbox-enable-root-translation) <Notice>: sandbox_enable_root_translation failed: -1, 103
+```
+
+То есть: APFS отсутствует (`ENOENT` на `fsctl`), cookie/system volume нет,
+sandbox root translation не работает, AppleKeyStore-сервиса нет, и launchd
+падает в `assertion failed` на `launchd.real + 0xED71` (это район настройки
+односекундного таймера/dispatch-source; аргумент `-1`).
+
+В этом прогоне загрузка остановилась **внутри boot-task'а
+`init-with-data-volume`** (в предыдущих — после всего списка), то есть точка
+остановки плавает, но всегда это ожидание в userland, а не планировщик.
+
+### Откуда брать системный launchd: SharedSupport.dmg (2026-10-31)
+
+Есть распакованный `SharedSupport.dmg`: `~/dmgwork/Shared Support/`, внутри
+`com_apple_MobileAsset_MacSoftwareUpdate` (18 ГиБ) с такими частями:
+
+| запись | формат | что это |
+| --- | --- | --- |
+| `payloadv2/payload.NNN` (много) | `pbzx` → XZ → AppleArchive (`YAA1`) | полное дерево системы |
+| `payloadv2/image_patches/cryptex-system-x86_64` | `RIDIFF10` | **дифф** системного криптекса (1.6 ГиБ) |
+| `payloadv2/basesystem_patches/x86_64BaseSystem.dmg` | `BXDIFF50` | **дифф** BaseSystem |
+| `AssetData/boot/kernelcache.release.mac16j` | kernelcache | уже используется |
+
+`pbzx` разбирается: 8-байтовое BE-поле размера чанка (8 МиБ), затем
+xz-поток; первый же чанк `payload.001` даёт заголовок AppleArchive и имена
+вида `System/Library/Frameworks/LinkPresentation.framework/...`, то есть
+системные файлы там действительно лежат целиком.
+
+Важно: `~/aa/root` (то, что уже распаковано из BaseSystem) содержит
+**тот же самый** bootstrapper-launchd (строка версии совпадает байт в байт),
+поэтому «системного» launchd там нет — он внутри `payloadv2`-потоков.
+
+Следующий практический шаг: экстрактор AppleArchive (`YAA1`, с LZFSE) —
+своими силами или готовым инструментом; после него можно вытащить
+`sbin/launchd`, `usr/lib/dyld`, `usr/lib/system/*.dylib`,
+`System/Library/xpc/launchd.plist` и минимальный набор
+`System/Library/LaunchDaemons`, то есть собрать «инсталлированный» root.
