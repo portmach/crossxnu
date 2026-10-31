@@ -481,3 +481,61 @@ launchd с полным набором доменов. Поэтому ожида
 (`workq_death_call_schedule()`) откачена: она больше не нужна, поведение
 вернулось к стоковому (перепроверено загрузкой — финальное состояние то же
 самое, `hlt` в `machine_idle`, boot-task'и завершены).
+
+### Почему launchd ничего не запускает: он не читает каталоги заданий
+
+Трассировка путей pid 1 сделана полной (без лимита в 800 записей, с именами
+вызовов), прогон `build/serial-mon3.log`: 4587 открытий/статов.
+
+`posix_spawn` за весь запуск (то есть спавн/exec/reap в ядре работают):
+
+```
+/sbin/mount
+/usr/libexec/init_data_protection
+/usr/libexec/cc_fips_test
+/usr/libexec/dirs_cleaner
+/usr/libexec/MobileAssetEarlyBootTask
+/usr/sbin/BootCacheControl
+/usr/libexec/rc.temporaryDataVolume
+/private/var/install/deferred_install
+/usr/libexec/applekeystored
+```
+
+А вот **каталоги заданий launchd не открывает вообще** — ни
+`/System/Library/LaunchDaemons`, ни `/Library/LaunchDaemons`,
+ни `/System/Library/LaunchAgents`, ни `/Library/LaunchAgents`
+(в трассе нет ни одного `open` на эти пути; из
+`/System/Library/LaunchDaemons` читаются только два файла
+`com.apple.jetsamproperties.*.plist`, то есть как данные лимитов памяти).
+
+Зато он пытается прочитать ровно такой набор конфигурации:
+
+```
+/etc/rc.launchd
+/System/Library/CoreServices/SystemVersion.plist
+/System/Library/CoreServices/SystemVersionCompat.plist
+/private/etc/com.apple.xpc.launchd.limits.plist
+/private/var/db/com.apple.xpc.launchd/config/system.plist
+/private/var/db/com.apple.xpc.launchd/config/user.plist
+/System/Library/Sandbox/com.apple.xpc.launchd.rootless.plist
+/System/Volumes/Preboot/<uuid>/.roots-installed
+/System/Volumes/iSCPreboot/<uuid>/.roots-installed
+```
+
+плюс создаёт `/private/var/log/com.apple.xpc.launchd` и пишет
+`launchd.log`. Файлов `config/system.plist` и `config/user.plist` в образе
+нет — то есть пользовательской конфигурации заданий тоже нет.
+
+Список boot-task'ов при этом **вкомпилирован в бинарь**: строки
+`mount-phase-1`, `dirs_cleaner-usr` и т.п. есть в `launchd.real`
+(проверено поиском по бинарю), а «optional boot task not present» — это
+проверка наличия helper'а на диске. Список заканчивается на
+`dirs_cleaner-usr`, после чего загрузчику делать нечего.
+
+Итог: recovery-`launchd` — это bootstrapper с вкомпилированным списком
+задач; он принципиально не сканирует каталоги заданий, поэтому положить
+`/Library/LaunchDaemons/com.crossxnu.hello.plist` (или что угодно ещё) и
+ждать спавна бессмысленно. Чтобы launchd начал запускать сервисы, нужен
+**системный** launchd с настоящим деревом заданий — то есть переход к
+«инсталлированному» root'у (пусть и минимальному, собранному руками), а не
+к recovery-огрызку.

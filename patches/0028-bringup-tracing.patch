@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/i386/systemcalls.c b/bsd/dev/i386/systemcalls.c
-index a352414..d3b3a0e 100644
+index a352414..eb73d04 100644
 --- a/bsd/dev/i386/systemcalls.c
 +++ b/bsd/dev/i386/systemcalls.c
-@@ -59,6 +59,143 @@
+@@ -59,6 +59,163 @@
  
  #if CONFIG_MACF
  #include <security/mac_framework.h>
@@ -73,6 +73,7 @@ index a352414..d3b3a0e 100644
 + */
 +extern int copyinstr(const user_addr_t uaddr, void *kaddr, size_t len,
 +    size_t *done);
++extern const char *syscallnames[];
 +
 +static int
 +crossxnu_path_has_launch(const char *s)
@@ -107,6 +108,9 @@ index a352414..d3b3a0e 100644
 +		return;
 +	}
 +	switch (code) {
++	case 12:        /* chdir */
++	case 58:        /* readlink */
++	case 188:       /* stat */
 +	case 5:         /* open */
 +	case 59:        /* execve */
 +	case 10:        /* unlink */
@@ -122,6 +126,11 @@ index a352414..d3b3a0e 100644
 +	case 244:       /* posix_spawn */
 +	case 463:       /* openat */
 +	case 464:       /* openat_nocancel */
++	case 469:       /* fstatat */
++	case 470:       /* fstatat64 */
++	case 472:       /* unlinkat */
++	case 473:       /* readlinkat */
++	case 475:       /* mkdirat */
 +		idx = 1;
 +		break;
 +	default:
@@ -139,14 +148,25 @@ index a352414..d3b3a0e 100644
 +		return;
 +	}
 +	npath++;
-+	if (npath <= 800 || crossxnu_path_has_launch(buf)) {
-+		printf("crossxnu: p1 path %d <%s>\n", code, buf);
++	/*
++	 * crossxnu: pid 1 gets a complete path trace - the point of this
++	 * diagnostic is to see which configuration paths launchd opens at all,
++	 * so nothing may be dropped by a cap.  Children stay filtered.
++	 */
++	if (p->p_pid == 1) {
++		printf("crossxnu: p1 path %s <%s>\n",
++		    (code >= 0 && code < 600 && syscallnames[code] != NULL) ?
++		    syscallnames[code] : "?", buf);
++	} else if (crossxnu_path_has_launch(buf)) {
++		printf("crossxnu: path %s pid=%d <%s>\n",
++		    (code >= 0 && code < 600 && syscallnames[code] != NULL) ?
++		    syscallnames[code] : "?", p->p_pid, buf);
 +	}
 +}
  #endif
  
  #if CONFIG_DTRACE
-@@ -308,6 +445,7 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -308,6 +465,7 @@ unix_syscall64(x86_saved_state_t *state)
  
  	code    = regs->rax & SYSCALL_NUMBER_MASK;
  	syscode = (code < nsysent) ? code : SYS_invalid;
@@ -154,7 +174,7 @@ index a352414..d3b3a0e 100644
  	DEBUG_KPRINT_SYSCALL_UNIX(
  		"unix_syscall64: code=%d(%s) rip=%llx\n",
  		code, syscallnames[syscode], regs->isf.rip);
-@@ -360,6 +498,9 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -360,6 +518,9 @@ unix_syscall64(x86_saved_state_t *state)
  		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
  	}
  
@@ -209,10 +229,10 @@ index b306145..143e29e 100644
  	DEBUG_KPRINT_SYSCALL_MACH(
  		"mach_call_munger64: code=%d(%s)\n",
 diff --git a/osfmk/kern/bsd_kern.c b/osfmk/kern/bsd_kern.c
-index 70bdafc..eb86cb5 100644
+index 70bdafc..700f64d 100644
 --- a/osfmk/kern/bsd_kern.c
 +++ b/osfmk/kern/bsd_kern.c
-@@ -1519,3 +1519,233 @@ kern_return_for_errno(int bsd_errno)
+@@ -1519,3 +1519,249 @@ kern_return_for_errno(int bsd_errno)
  		return KERN_FAILURE;
  	}
  }
@@ -238,6 +258,7 @@ index 70bdafc..eb86cb5 100644
 +	uintptr_t conts[24];
 +	uint64_t evs[24];
 +	uint64_t sysu[24], sysm[24], csw[24];
++	uint64_t urips[24];
 +	int runqs[24];
 +	int n = 0, i;
 +
@@ -259,6 +280,19 @@ index 70bdafc..eb86cb5 100644
 +		sysu[n] = th->syscalls_unix;
 +		sysm[n] = th->syscalls_mach;
 +		csw[n] = th->c_switch;
++		/*
++		 * crossxnu: where the thread entered the kernel from.  For a
++		 * blocked thread this names the userspace caller that is stuck,
++		 * which the kernel continuation alone cannot tell.
++		 */
++		urips[n] = 0;
++		{
++			x86_saved_state_t *iss = USER_STATE(th);
++
++			if (iss != NULL && is_saved_state64(iss)) {
++				urips[n] = saved_state64(iss)->isf.rip;
++			}
++		}
 +		{
 +			int k;
 +
@@ -286,12 +320,14 @@ index 70bdafc..eb86cb5 100644
 +		 * "<ptr>" when the output goes to a log.
 +		 */
 +		printf("crossxnu: threads(%s):  tid=%llu tag=0x%x state=0x%x opt=0x%x "
-+		    "cont=%08x%08x ev=%08x%08x sys=%llu/%llu cs=%llu runq=%d\n",
++		    "cont=%08x%08x ev=%08x%08x sys=%llu/%llu cs=%llu runq=%d "
++		    "urip=%08x%08x\n",
 +		    where, (unsigned long long)tids[i], tags[i], states[i], opts[i],
 +		    (unsigned)(conts[i] >> 32), (unsigned)conts[i],
 +		    (unsigned)(evs[i] >> 32), (unsigned)evs[i],
 +		    (unsigned long long)sysu[i], (unsigned long long)sysm[i],
-+		    (unsigned long long)csw[i], runqs[i]);
++		    (unsigned long long)csw[i], runqs[i],
++		    (unsigned)(urips[i] >> 32), (unsigned)urips[i]);
 +	}
 +}
 +
