@@ -313,10 +313,10 @@ index a352414..01b0da3 100644
  skip_syscall:
  #endif /* CONFIG_MACF */
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
-index 949728f..68fed31 100644
+index 949728f..5beabb2 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1065,6 +1065,26 @@ bsd_init(void)
+@@ -1065,6 +1065,38 @@ bsd_init(void)
  	}
  #endif
  
@@ -338,6 +338,18 @@ index 949728f..68fed31 100644
 +		crossxnu_kr = OSKextLoadKextWithIdentifier("com.crossxnu.hello");
 +		bsd_init_kprintf("crossxnu: OSKextLoadKextWithIdentifier("
 +		    "com.crossxnu.hello) -> %d\n", crossxnu_kr);
++
++		/*
++		 * The real target: Apple's APFS, taken from the KDK (a normal
++		 * unprelinked kext) and prelinked into our collection together
++		 * with the small set of kexts it imports from
++		 * (IOStorageFamily, CoreAnalyticsFamily, AppleEffaceableStorage,
++		 * AppleImage4, corecrypto).  OSKext resolves and starts those
++		 * dependencies itself.
++		 */
++		crossxnu_kr = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
++		bsd_init_kprintf("crossxnu: OSKextLoadKextWithIdentifier("
++		    "com.apple.filesystems.apfs) -> %d\n", crossxnu_kr);
 +	}
 +
  #if 0 /* not yet */
@@ -365,6 +377,43 @@ index 1d8db27..a07b8d1 100644
  		proc_ro_data.p_idversion = OSIncrementAtomic(&nextpidversion);
  		/* kernel process is handcrafted and not from fork, so start from 1 */
  		proc_ro_data.p_uniqueid = ++nextuniqueid;
+diff --git a/libkern/c++/OSKext.cpp b/libkern/c++/OSKext.cpp
+index 186c3a9..91e3a8a 100644
+--- a/libkern/c++/OSKext.cpp
++++ b/libkern/c++/OSKext.cpp
+@@ -7470,6 +7470,16 @@ register_kmod:
+ 		for (uint32_t refIndex = 0; refIndex < num_kmod_refs; refIndex++) {
+ 			kmod_reference_t * ref = &(kmod_info->reference_list[refIndex]);
+ 			OSKext * refKext = OSDynamicCast(OSKext, dependencies->getObject(refIndex));
++			/*
++			 * crossxnu: codeless dependencies (notably the com.apple.kpi.*
++			 * pseudo-kexts in our synthetic collection) have no kmod_info;
++			 * upstream only ever sees prelinked KPI entries that carry one.
++			 * Skip them instead of dereferencing NULL.
++			 */
++			if (refKext == NULL || refKext->kmod_info == NULL) {
++				ref->info = NULL;
++				continue;
++			}
+ 			ref->info = refKext->kmod_info;
+ 			ref->info->reference_count++;
+ 
+diff --git a/osfmk/device/subrs.c b/osfmk/device/subrs.c
+index d858958..73e90fe 100644
+--- a/osfmk/device/subrs.c
++++ b/osfmk/device/subrs.c
+@@ -296,6 +296,11 @@ strlen_impl(const char *string)
+ size_t
+ strnlen_impl(const char *s, size_t max)
+ {
++	if (s == NULL) {
++		printf("crossxnu: strnlen(NULL, 0x%zx) from %p\n",
++		    max, __builtin_return_address(0));
++		return 0;
++	}
+ 	const char *es = s + max, *p = s;
+ 	while (p != es && *p) {
+ 		p++;
 diff --git a/osfmk/i386/bsd_i386.c b/osfmk/i386/bsd_i386.c
 index b306145..143e29e 100644
 --- a/osfmk/i386/bsd_i386.c
