@@ -313,10 +313,128 @@ index a352414..01b0da3 100644
  skip_syscall:
  #endif /* CONFIG_MACF */
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
-index 949728f..711fe14 100644
+index 949728f..74a44e9 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1065,6 +1065,46 @@ bsd_init(void)
+@@ -481,6 +481,117 @@ bsd_rooted_ramdisk(void)
+  * of the tro_ucred field so that the uthread structure can be
+  * used like any other.
+  */
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++/* bsd_init.c is C, so no IOKit class headers here: the rammedia kext dumps the
++ * I/O Registry (it is C++ and loads before this point). */
++
++/*
++ * Report which /dev nodes exist: when the APFS volume never gets one, the
++ * question is which of the container media, its BSD client and the volume are
++ * actually present.
++ */
++static void
++crossxnu_probe_devfs(void)
++{
++	static const char *const paths[] = {
++		"/dev/console", "/dev/null", "/dev/md0", "/dev/md1",
++		"/dev/disk0", "/dev/disk0s1", NULL
++	};
++
++	for (int i = 0; paths[i] != NULL; i++) {
++		vnode_t vp = NULLVP;
++		int err = vnode_lookup(paths[i], 0, &vp, vfs_context_kernel());
++
++		printf("crossxnu: probe %s -> %d\n", paths[i], err);
++		if (err == 0) {
++			vnode_put(vp);
++		}
++	}
++}
++
++/*
++ * crossxnu: mount the APFS volume that the rammedia kext publishes.
++ *
++ * Non-static on purpose: this keeps it in the kernel symbol table so the
++ * kext can call it again once the media BSD client has created the /dev node.
++ *
++ * APFS mounts only the *container* (nx_mount) when its container scheme
++ * starts; a volume is a separate VFS mount, which on macOS is launchd's job -
++ * and launchd skips apfs_boot_util entirely unless the root is already APFS.
++ * On this HFS+ root its fsctl(APFSIOC_GET_DEV_BY_ROLE) therefore answers
++ * ENOENT forever, so the mount is done from the kernel instead.
++ *
++ * The /dev node comes from an IOMedia BSD client, which only matches once
++ * IOKitBSDInit() has published the IOBSD resource and the matching cascade has
++ * run, so poll for a while rather than assuming it is already there.
++ *
++ * kernel_mount() takes mount(2)'s extra indirection (a user_addr_t pointing at
++ * the device path), hence the address of the stack pointer, as imageboot.c
++ * does for the base-system mount.
++ */
++void crossxnu_mount_apfs_volume(void);
++
++void
++crossxnu_mount_apfs_volume(void)
++{
++	static const char *const candidates[] = {
++		"/dev/disk0s1", "/dev/disk0s2", "/dev/disk0s3",
++		"/dev/disk0", NULL
++	};
++	static const char *const mountpoints[] = { "/mnt1", "/Volumes", NULL };
++
++	for (int attempt = 0; attempt < 60; attempt++) {
++		for (int c = 0; candidates[c] != NULL; c++) {
++			vnode_t devvp = NULLVP;
++			char devpath[64];
++			char *devpathp;
++			char **devpathpp;
++
++			if (vnode_lookup(candidates[c], 0, &devvp,
++			    vfs_context_kernel()) != 0) {
++				continue;
++			}
++			vnode_put(devvp);
++
++			/* Mount(2)'s data argument points at the device path. */
++			strlcpy(devpath, candidates[c], sizeof(devpath));
++			devpathp = &devpath[0];
++			devpathpp = &devpathp;
++
++			for (int m = 0; mountpoints[m] != NULL; m++) {
++				vnode_t mntvp = NULLVP;
++				int merr;
++
++				if (vnode_lookup(mountpoints[m], 0, &mntvp,
++				    vfs_context_kernel()) != 0) {
++					continue;
++				}
++				vnode_put(mntvp);
++
++				merr = kernel_mount("apfs", NULLVP, NULLVP,
++				    mountpoints[m], devpathpp, 0,
++				    (MNT_RDONLY | MNT_DONTBROWSE),
++				    KERNEL_MOUNT_NOAUTH, vfs_context_kernel());
++
++				printf("crossxnu: mount -t apfs %s %s -> %d\n",
++				    candidates[c], mountpoints[m], merr);
++				if (merr == 0) {
++					return;
++				}
++			}
++		}
++
++		if (attempt == 0) {
++			printf("crossxnu: no APFS volume node yet, polling\n");
++		}
++		IOSleep(250);
++	}
++
++	printf("crossxnu: gave up waiting for an APFS volume node\n");
++	crossxnu_probe_devfs();
++}
++#endif /* CROSSXNU_SECURITY_PERMISSIVE */
++
+ void
+ bsd_init(void)
+ {
+@@ -1065,6 +1176,54 @@ bsd_init(void)
  	}
  #endif
  
@@ -360,9 +478,39 @@ index 949728f..711fe14 100644
 +		    "com.apple.filesystems.apfs) -> %d\n", crossxnu_kr);
 +	}
 +
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	/*
++	 * crossxnu: the APFS volume is mounted after IOKitBSDInit() below, not
++	 * here: its /dev node is created by an IOMedia BSD client, and those
++	 * only match once the IOBSD resource has been published.
++	 */
++#endif /* CROSSXNU_SECURITY_PERMISSIVE */
++
  #if 0 /* not yet */
  	consider_zone_gc(FALSE);
  #endif
+@@ -1131,7 +1290,21 @@ bsd_autoconf(void)
+ 		}
+ 	}
+ 
++#ifdef CROSSXNU_SECURITY_PERMISSIVE
++	{
++		kern_return_t bsdinit_kr = IOKitBSDInit();
++
++		/*
++		 * IOBSD exists now, so the media BSD clients can match and the
++		 * APFS volume's /dev node appears; that cascade is not
++		 * synchronous, hence the polling inside the helper.
++		 */
++		crossxnu_mount_apfs_volume();
++		return bsdinit_kr;
++	}
++#else /* !CROSSXNU_SECURITY_PERMISSIVE */
+ 	return IOKitBSDInit();
++#endif
+ }
+ 
+ 
 diff --git a/bsd/kern/kern_fork.c b/bsd/kern/kern_fork.c
 index 1d8db27..a07b8d1 100644
 --- a/bsd/kern/kern_fork.c

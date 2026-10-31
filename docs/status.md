@@ -1218,3 +1218,42 @@ Not booted from APFS, skipping apfs_boot_util
 `kc-add-segment.py` (имя сегмента — параметр), а хук в `bsd_init.c`
 (патч `0028`) теперь грузит наш kext перед APFS.
 
+### 11.5 Устройство публикуется после IOBSD, иначе нет /dev-узла
+
+Первые попытки смонтировать том упирались в то, что `/dev/disk0` вообще не
+существовал: BSD-клиенты медиа (`IOMediaBSDClient`, `AppleAPFSMediaBSDClient`)
+матчатся по `IOResourceMatch = IOBSD`, а этот ресурс публикует
+`IOKitBSDInit()` — в самом конце `bsd_init()`, уже после нашего хука.
+Медиа, зарегистрированное раньше, узла не получает никогда.
+
+Поэтому публикация в kext'е отложена: kmod `start()` только создаёт объект,
+а `IOTimerEventSource` на отдельном workloop ждёт появления свойства `IOBSD`
+у `IOResources`, и лишь затем делает `attach`/`start`/`registerService`.
+Проверка в одном прогоне:
+
+```
+crossxnu: probe /dev/console -> 2      # до публикации /dev ещё пуст
+...
+CrossXnuRAMStorage: 8388608 bytes at <ptr>, 2048 blocks of 4096
+crossxnu: mount -t apfs /dev/disk0 /mnt1 -> 22
+```
+
+То есть `/dev/disk0` теперь появляется (узел контейнера), а монтирование
+возвращает `22` (`EINVAL`) — следующий вопрос: APFS не принимает контейнерное
+устройство как точку монтирования (в macOS монтируют том, `disk0s1`, либо
+контейнер с опцией `role=`), и узла тома `disk0s1` пока нет: тома
+перечисляет сам APFS при обработке монтирования.
+
+Что пробовать дальше, по порядку:
+
+1. Варианты `kernel_mount` в одном прогоне: `disk0` без `MNT_RDONLY`;
+   `disk0` с `KERNEL_MOUNT_BASESYSTEMROOT`; данные вида `disk0,role=system`
+   (APFS понимает `-o role=`), чтобы APFS сам нашёл том по роли.
+2. Если узел тома всё-таки нужен — заставить APFS перечислить тома (ioctl
+   `APFSIOC_GET_DEV_BY_ROLE` по контейнеру как раз это и делает; launchd
+   получает `ENOENT`, потому что ничего не смонтировано).
+
+Смонтировать том из kext'а нельзя: `kernel_mount()` — не экспортируется в
+таблицу символов ядра, поэтому kext вызывает `crossxnu_mount_apfs_volume()`
+(теперь не `static`), а вся работа с VFS остаётся в `bsd_init.c`.
+

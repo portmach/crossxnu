@@ -16,6 +16,8 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOTimerEventSource.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <libkern/kernel_mach_header.h>
 #include <mach/kmod.h>
@@ -25,8 +27,12 @@
 #define kRAMStorageImageSegment "__APFSIMG"
 #define kRAMStorageImageMinimum 4096
 
-/* Every kext needs a kmod_info with start/stop entry points; the interesting
- * work happens in IOService::start() below, once the personality matches. */
+/* Kernel-side helper (bsd/kern/bsd_init.c) that mounts the volume once its
+ * /dev node exists: mounting needs kernel_mount() and VFS internals, which a
+ * kext cannot call. */
+extern "C" void crossxnu_mount_apfs_volume(void);
+
+/* Every kext needs a kmod_info with start/stop entry points. */
 extern "C" kern_return_t crossxnu_ramstorage_start(kmod_info_t *ki, void *data);
 extern "C" kern_return_t crossxnu_ramstorage_stop(kmod_info_t *ki, void *data);
 
@@ -41,10 +47,22 @@ private:
 	UInt64          _imageSize;
 	UInt64          _blockCount;
 	UInt32          _blockSize;
+	IOWorkLoop *    _workLoop;
+	IOTimerEventSource * _timer;
+	int             _waits;
+
+	static void publishTimer(OSObject *owner, IOTimerEventSource *sender);
 
 public:
 	virtual bool     init(OSDictionary *properties) APPLE_KEXT_OVERRIDE;
 	virtual bool     start(IOService *provider) APPLE_KEXT_OVERRIDE;
+	virtual void     free(void) APPLE_KEXT_OVERRIDE;
+
+	/* Publishing is deferred until IOKitBSDInit() has published the IOBSD
+	 * resource: the media BSD clients match on it, and a media that appears
+	 * earlier never gets a /dev node. */
+	bool publish(IOService *provider);
+	void schedulePublish(void);
 
 	virtual IOReturn doEjectMedia(void) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn doFormatMedia(UInt64 byteCapacity) APPLE_KEXT_OVERRIDE;
@@ -77,6 +95,77 @@ bool com_crossxnu_RAMStorage::init(OSDictionary *properties)
 	_imageSize  = 0;
 	_blockCount = 0;
 	_blockSize  = kRAMStorageBlockSize;
+	_workLoop   = NULL;
+	_timer      = NULL;
+	_waits      = 0;
+
+	return true;
+}
+
+/* Called by the timer: wait for IOBSD, then publish and ask the kernel to
+ * mount the volume. */
+void com_crossxnu_RAMStorage::publishTimer(OSObject *owner, IOTimerEventSource *sender)
+{
+	com_crossxnu_RAMStorage *self = OSDynamicCast(com_crossxnu_RAMStorage, owner);
+	IOService *resources;
+
+	(void)sender;
+
+	if (self == NULL)
+		return;
+
+	resources = IOService::getResourceService();
+	if (resources == NULL || resources->getProperty("IOBSD") == NULL) {
+		/* IOKitBSDInit() has not run yet; try again shortly. */
+		if (++self->_waits < 80)
+			self->_timer->setTimeoutMS(250);
+		else
+			IOLog("CrossXnuRAMStorage: IOBSD never appeared\n");
+		return;
+	}
+
+	if (!self->publish(IOService::getResourceService())) {
+		IOLog("CrossXnuRAMStorage: publishing the device failed\n");
+		return;
+	}
+
+	/* The media BSD clients run from here, so their /dev nodes exist by the
+	 * time the kernel helper looks for them (it polls as well). */
+	crossxnu_mount_apfs_volume();
+}
+
+void com_crossxnu_RAMStorage::schedulePublish(void)
+{
+	_workLoop = IOWorkLoop::workLoop();
+	if (_workLoop == NULL) {
+		IOLog("CrossXnuRAMStorage: no work loop, publishing now\n");
+		publish(IOService::getResourceService());
+		crossxnu_mount_apfs_volume();
+		return;
+	}
+
+	_timer = IOTimerEventSource::timerEventSource(this,
+	    &com_crossxnu_RAMStorage::publishTimer);
+	if (_timer == NULL || _workLoop->addEventSource(_timer) != kIOReturnSuccess) {
+		IOLog("CrossXnuRAMStorage: no timer, publishing now\n");
+		publish(IOService::getResourceService());
+		crossxnu_mount_apfs_volume();
+		return;
+	}
+
+	_timer->setTimeoutMS(100);
+}
+
+bool com_crossxnu_RAMStorage::publish(IOService *provider)
+{
+	/* IOBlockStorageDriver matches on device-type, which IOBlockStorageDevice's
+	 * own init() sets to "Generic"; make the media look like a whole disk. */
+	setProperty(kIOBlockStorageDeviceTypeKey, kIOBlockStorageDeviceTypeGeneric);
+
+	if (!attach(provider) || !start(provider)) {
+		return false;
+	}
+	registerService();
 
 	return true;
 }
@@ -110,13 +199,18 @@ bool com_crossxnu_RAMStorage::start(IOService *provider)
 	      (unsigned long long)_imageSize, _image,
 	      (unsigned long long)_blockCount, _blockSize);
 
-	/* IOBlockStorageDriver matches on device-type, which IOBlockStorageDevice's
-	 * own init() sets to "Generic"; make the media look like a whole disk. */
-	setProperty(kIOBlockStorageDeviceTypeKey, kIOBlockStorageDeviceTypeGeneric);
-
-	registerService();
-
 	return true;
+}
+
+void com_crossxnu_RAMStorage::free(void)
+{
+	if (_workLoop != NULL && _timer != NULL) {
+		_workLoop->removeEventSource(_timer);
+	}
+	OSSafeReleaseNULL(_timer);
+	OSSafeReleaseNULL(_workLoop);
+
+	super::free();
 }
 
 IOReturn com_crossxnu_RAMStorage::doEjectMedia(void)
@@ -270,8 +364,6 @@ extern "C" kern_return_t
 crossxnu_ramstorage_start(kmod_info_t *ki, void *data)
 {
 	com_crossxnu_RAMStorage *dev;
-	IOService *provider;
-	bool ok;
 
 	(void)ki;
 	(void)data;
@@ -285,19 +377,13 @@ crossxnu_ramstorage_start(kmod_info_t *ki, void *data)
 		return KERN_FAILURE;
 	}
 
-	provider = IOService::getResourceService();
-	if (provider == NULL)
-		provider = IOService::getServiceRoot();
-
-	ok = (provider != NULL) && dev->attach(provider) && dev->start(provider);
-	if (!ok) {
-		IOLog("CrossXnuRAMStorage: cannot publish the device\n");
-		dev->detachAll(gIOServicePlane);
-		dev->release();
-		return KERN_FAILURE;
-	}
-
-	dev->registerService();
+	/*
+	 * Do not attach yet: the media BSD clients match on the IOBSD resource,
+	 * which IOKitBSDInit() publishes near the end of bsd_init().  A media
+	 * registered before that never gets a /dev node (and without a node there
+	 * is nothing to mount), so publish from a timer once IOBSD is there.
+	 */
+	dev->schedulePublish();
 
 	return KERN_SUCCESS;
 }
