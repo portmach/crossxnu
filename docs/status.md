@@ -1116,7 +1116,7 @@ segments:        5
 
 Варианты (по возрастанию стоимости):
 
-1. **Свой kext-«rammedia»**: `IOMedia` над буфером в памяти, который
+1. **Свой kext-«blockstorage»**: `IOMedia` над буфером в памяти, который
    загрузчик уже умеет читать (`ramdisk.img`) — без PCI/ACPI. Блокер:
    нет `IOKit/storage/IOMedia.h` и `IOStorage.h` (их нет ни в XNU, ни в KDK,
    ни в нашем синтетическом SDK) — нужны заголовки из macOS SDK/Kernel.framework.
@@ -1151,7 +1151,7 @@ ACPI, ни работы с физической памятью: образ APFS 
 |:--|:--|
 | Образ | `__APFSIMG` — сегмент коллекции (`scripts/kc-add-segment.py`), RWX; загрузчик мапит его как любую другую часть KC |
 | Доступ | kext ищет сегмент через `getsegbyname("__APFSIMG")` — тот же вызов, что и `bsd_init.c` для `__ROOTIMG`, так что адрес сразу является VA ядра |
-| Устройство | `tools/rammedia-kext/rammedia.cpp`: `IOBlockStorageDevice` над этим буфером, блок 4096 |
+| Устройство | `tools/blockstorage-kext/blockstorage.cpp`: `IOBlockStorageDevice` над этим буфером, блок 4096 |
 | Публикация | kmod `start()` сам создаёт объект, делает `attach(IOService::getResourceService())` и `registerService()`; `bsd_init.c` просит OSKext загрузить kext по идентификатору прямо перед APFS |
 | Медиа | `IOBlockStorageDriver` из `IOStorageFamily` матчится по `device-type=Generic` и создаёт `IOMedia` (`Whole`) |
 | Заголовки | `IOKit/storage/*` берутся из SDK (`tools/kext-loader/fetch-sdk-headers.ps1`) в `build/sdk-ext`; в репозиторий не попадают |
@@ -1441,3 +1441,93 @@ apfs_log_op_with_proc:3197: disk1s1 mount-complete volume crossxnu
 ~8 МБ. Настоящий System-том туда не влезет. Выход — реальный диск вместо
 сегмента; в KDK есть x86_64-срезы у `AppleAHCIPort` и `IONVMeFamily`
 (`AppleVirtIOStorage` по-прежнему только arm64e, virtio-blk закрыт).
+
+## 12. Настоящий диск: APFS-том на AHCI (2026-10-31)
+
+Потолок из §11.7 (~8 МБ на образ, пока он лежит сегментом в KC) снят: том
+APFS теперь живёт в файле на хосте и отдаётся гостю через AHCI. Размер
+выбирается какой угодно — 256 МиБ в проверке ниже, дальше можно гигабайты.
+
+### 12.1 Почему свой драйвер, а не Apple-стек
+
+Стек Apple требовал бы `IOPCIFamily` плюс PCI-нубы (в macOS их публикует
+ACPI/`AppleACPIPlatform`), а в этом ядре нет ни ACPI, ни `IOPCIFamily`:
+платформенный экспертиз — наш заглушечный (`crossxnu: using built-in platform
+expert stub for "ACPI"`). В KDK при этом есть x86_64-срезы у `IOAHCIFamily`,
+`IOPCIFamily`, `AppleAHCIPort`, `IONVMeFamily`, но `IONVMeFamily` тянет
+`AppleARMPlatform`, `AppleSMC`, `AppleEmbeddedPCIE`, `RTBuddy`, а
+`AppleVirtIOStorage` остаётся arm64-only (virtio-blk закрыт, §10).
+
+Поэтому AHCI реализован прямо в нашем kext'е — тем же способом, что и
+RAM-бэкенд: `IOBlockStorageDevice` → `IOBlockStorageDriver` → `IOMedia` →
+APFS. Кекст называется `com.crossxnu.driver.CrossXnuBlockStorage`
+(`tools/blockstorage-kext/blockstorage.cpp`) и выбирает бэкенд в `start()`:
+AHCI, если найден диск, иначе сегмент `__APFSIMG`.
+
+Что понадобилось и чем это сделано:
+
+| Задача | Решение |
+| --- | --- |
+| найти контроллер | PCI config space механизмом #1 через порты `0xCF8/0xCFC` (класс `0x010601`), `inl`/`outl` инлайновым ассемблером |
+| включить декодирование | `PCI_COMMAND` = memory space + bus master |
+| отобразить ABAR | `IOMemoryDescriptor::withPhysicalAddress()` + `map(kIOMapAnywhere \| kIOMapInhibitCache)` |
+| DMA-память | `IOMallocContiguous()` (command list 1 КиБ/1 КиБ, command table 4 КиБ/128 Б, bounce 256 КиБ) |
+| команды | `IDENTIFY` (0xEC), `READ DMA EXT` (0x25), `WRITE DMA EXT` (0x35), один слот, один PRDT-элемент |
+| ёмкость | слова 100–103 IDENTIFY (LBA48), блок 512 байт |
+
+### 12.2 Две ошибки, которые нашлись по логам
+
+1. **«port never went idle»** (`kIOReturnTimeout`, `0xE00002D6`) на обоих
+   портах. Проверка простоя ждала `PxCI == 0 && PxCMD.CR == 0`, но `CR`
+   поднят всё время, пока поднят `ST`, — условие невыполнимо. Правильно ждать
+   только `PxCI == 0`; `CR` проверяется отдельно, после снятия `ST`.
+2. **Выбран не тот диск.** Эвристика «самый большой» выбрала ESP (1.2 ГиБ,
+   FAT) вместо образа APFS (256 МиБ), и APFS ожидаемо ответила `ENOENT`.
+   Заменено на содержательную проверку: читаем блок 0 и смотрим магию `NXSB`
+   по смещению `0x20` (§11.1). Теперь лог сам говорит, что на порту:
+   `port 0: block 0 is not APFS`, `port 1: block 0 is APFS (NXSB)`.
+
+Отдельная грабли: после переименования kext'а я пересобрал KC, но не ядро —
+`bsd_init.c` продолжал просить `...CrossXnuRAMStorage`, kext не загружался
+(в логе ни одной его строки), и молча работал только RAM-бэкенд. Правило:
+меняется идентификатор — пересобирается и ядро.
+
+### 12.3 Прогон
+
+`build/apfs256.img` (mkapfs + роль system), `build/serial-ahci4.log`:
+
+```
+CrossXnuBlockStorage: AHCI at 00:1f.2 (vendor 8086 device 2922)
+CrossXnuBlockStorage: ABAR 81084000 cap c0141f05 pi 0000003f
+CrossXnuBlockStorage: port 0 attached, sig 00000101
+CrossXnuBlockStorage: port 0: 2457601 sectors (1200 MiB) "QEMU HARDDISK"
+CrossXnuBlockStorage: port 0: block 0 is not APFS
+CrossXnuBlockStorage: port 1 attached, sig 00000101
+CrossXnuBlockStorage: port 1: 524289 sectors (256 MiB) "QEMU HARDDISK"
+CrossXnuBlockStorage: port 1: block 0 is APFS (NXSB)
+CrossXnuBlockStorage: using port 1, 524289 sectors (APFS)
+apfs: disk1s1 mounting volume ahtest, requested by: kernel_task (pid 0)
+apfs: disk1s1 mount-complete volume ahtest
+crossxnu: mount -t apfs /dev/disk0 /mnt1 -> 0
+```
+
+### 12.4 Как повторить
+
+```
+# 256 МиБ образ APFS с ролью system
+tools/bringup/make-apfs-image.sh 256M build/apfs256.img ahtest
+python3 tools/kext-loader/apfs-set-role.py --role system build/apfs256.img
+
+# kext + коллекция (второй аргумент "none" — без сегмента __APFSIMG)
+python3 tools/kext-loader/build-blockstorage-kext.py
+tools/kext-loader/build-apfs-image-kc.sh /tmp/kdkroot/System/Library/Extensions build/apfs8.img
+mcopy -o -i build/esp32.img build/kernel.kc ::/EFI/BOOT/kernel
+
+# загрузка со вторым диском на AHCI
+pwsh -File tools/kext-loader/boot-serial.ps1 -Log build/serial-ahci.log -Seconds 240 `
+  -ExtraArgs '-drive','file=build/apfs256.img,format=raw,if=ide,index=1'
+```
+
+Что дальше: сегмент `__APFSIMG` больше не нужен (KC можно собирать с `none`
+и он станет меньше), а том всё ещё пустой и висит на `/mnt1` — чтобы это
+меняло поведение launchd, его надо наполнить и сделать корнем (§11.7).

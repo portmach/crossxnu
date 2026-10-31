@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Build the rammedia kext (IOBlockStorageDevice over a kernel segment).
+"""Build the blockstorage kext: an IOBlockStorageDevice over an AHCI disk or,
+as a fallback, over a kernel segment.
 
 Reuses the kernel's own C++ compile flags so the kext is built against exactly
 the headers the kernel was built from (`-fapple-kext`, the same IOService /
 OSObject layout), plus the Kernel.framework storage headers fetched by
 tools/kext-loader/fetch-sdk-headers.ps1 into build/sdk-ext.
 
-Usage: build-rammedia-kext.py [--verbose]
+Usage: build-blockstorage-kext.py [--verbose]
 """
 import json
 import os
@@ -17,12 +18,12 @@ ROOT = "/mnt/c/Users/username000101/Workspaces/MachOS-crossxnu"
 CC_JSON = os.path.join(ROOT, "upstream/xnu/BUILD/obj/RELEASE_X86_64/compile_commands.json")
 EXT_HEADERS = os.path.join(ROOT, "build/sdk-ext/Kernel.framework/Versions/A/Headers")
 LD = os.path.join(ROOT, "build/cctools/bin/ld64")
-SRC = os.path.join(ROOT, "tools/rammedia-kext/rammedia.cpp")
-PLIST = os.path.join(ROOT, "tools/rammedia-kext/Info.plist")
-OUT = os.path.join(ROOT, "build/rammedia-kext")
-BUNDLE = os.path.join(OUT, "com.crossxnu.driver.CrossXnuRAMStorage.kext")
-OBJ = os.path.join(OUT, "rammedia.o")
-BIN = os.path.join(BUNDLE, "Contents/MacOS/crossxnu_ramstorage")
+SRC = os.path.join(ROOT, "tools/blockstorage-kext/blockstorage.cpp")
+PLIST = os.path.join(ROOT, "tools/blockstorage-kext/Info.plist")
+OUT = os.path.join(ROOT, "build/blockstorage-kext")
+BUNDLE = os.path.join(OUT, "com.crossxnu.driver.CrossXnuBlockStorage.kext")
+OBJ = os.path.join(OUT, "blockstorage.o")
+BIN = os.path.join(BUNDLE, "Contents/MacOS/crossxnu_blockstorage")
 
 verbose = "--verbose" in sys.argv
 

@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>crossxnu_ramstorage</string>
+	<string>crossxnu_blockstorage</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.crossxnu.driver.CrossXnuRAMStorage</string>
+	<string>com.crossxnu.driver.CrossXnuBlockStorage</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>CrossXnuRAMStorage</string>
+	<string>CrossXnuBlockStorage</string>
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>

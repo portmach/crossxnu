@@ -3,9 +3,10 @@
 
 crossxnu carries its root file system inside kernel.kc this way: the
 `__ROOTIMG` segment holds an HFS+ image, bsd_init.c hands it to memdev
-(mdevadd) as /dev/md0.  The same trick with `__APFSIMG` gives the rammedia
-kext (tools/rammedia-kext) an APFS container to publish, without a PCI bus,
-a block driver or a physical-memory mapping: the segment is mapped by the
+(mdevadd) as /dev/md0.  The same trick with `__APFSIMG` gives the blockstorage
+kext (tools/blockstorage-kext) an APFS container to publish when no AHCI disk
+is attached, without a PCI bus, a block driver or a physical-memory mapping:
+the segment is mapped by the
 loader like any other part of the collection, so the kext can address it
 directly and getsegbyname() finds it.
 

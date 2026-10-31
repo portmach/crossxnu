@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Build a kernel collection that carries the APFS container inside itself.
+# Build a kernel collection that carries the storage kext and, optionally, an
+# APFS image inside the collection.
 #
 # The collection gets the same Apple APFS kexts as build-apfs-kc.sh plus our
-# rammedia kext, and then the APFS image is appended as an __APFSIMG segment:
-# the loader maps it, the kext finds it with getsegbyname() and publishes an
-# IOBlockStorageDevice, IOStorageFamily's generic driver turns that into an
-# IOMedia, and AppleAPFSContainerSchemeWholeDisk probes it.
+# blockstorage kext.  That kext drives an AHCI-attached disk when QEMU has one
+# (see tools/kext-loader/boot-serial.ps1 -ExtraArgs); otherwise it falls back
+# to the __APFSIMG segment appended here: the loader maps it, the kext finds it
+# with getsegbyname() and publishes an IOBlockStorageDevice, IOStorageFamily's
+# generic driver turns that into an IOMedia, and AppleAPFSContainerSchemeWholeDisk
+# probes it.
 #
-# No PCI, no ACPI, no physical-memory bookkeeping - the segment is ordinary
-# kernel memory, writable, so APFS may write to it (changes last until reboot).
+# Pass "none" as the image to skip the segment: with a real AHCI disk the
+# collection then stays small, which matters because it has to fit below the
+# loader's bootinfo block at 0x2800000.
 #
-# Usage: tools/kext-loader/build-apfs-image-kc.sh [KDK_EXT_DIR] [IMAGE]
+# Usage: tools/kext-loader/build-apfs-image-kc.sh [KDK_EXT_DIR] [IMAGE|none]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,9 +26,11 @@ IMAGE="${2:-${CROSSXNU_BUILD}/apfs64.img}"
 PLAIN_KC="${CROSSXNU_BUILD}/kernel-plain.kc"
 OUT_KC="${CROSSXNU_BUILD}/kernel.kc"
 
-[[ -f "${IMAGE}" ]] || { echo "error: missing APFS image ${IMAGE}" >&2; exit 1; }
-[[ -d "${CROSSXNU_BUILD}/rammedia-kext/com.crossxnu.driver.CrossXnuRAMStorage.kext" ]] || {
-    echo "error: rammedia kext not built; run tools/kext-loader/build-rammedia-kext.py" >&2
+if [[ "${IMAGE}" != "none" ]]; then
+    [[ -f "${IMAGE}" ]] || { echo "error: missing APFS image ${IMAGE}" >&2; exit 1; }
+fi
+[[ -d "${CROSSXNU_BUILD}/blockstorage-kext/com.crossxnu.driver.CrossXnuBlockStorage.kext" ]] || {
+    echo "error: blockstorage kext not built; run tools/kext-loader/build-blockstorage-kext.py" >&2
     exit 1
 }
 
@@ -35,7 +41,7 @@ kexts=(
     "${KDK_EXT}/IOStorageFamily.kext"
     "${KDK_EXT}/CoreAnalyticsFamily.kext"
     "${KDK_EXT}/apfs.kext"
-    "${CROSSXNU_BUILD}/rammedia-kext/com.crossxnu.driver.CrossXnuRAMStorage.kext"
+    "${CROSSXNU_BUILD}/blockstorage-kext/com.crossxnu.driver.CrossXnuBlockStorage.kext"
 )
 
 args=()
@@ -62,7 +68,11 @@ done
 "${SCRIPT_DIR}/../../scripts/build-fileset.sh" "${args[@]}" --with-kpi >/dev/null
 mv "${CROSSXNU_BUILD}/kernel.kc" "${PLAIN_KC}"
 
-python3 "${SCRIPT_DIR}/../../scripts/kc-add-segment.py" \
-    "${PLAIN_KC}" "${IMAGE}" "${OUT_KC}" __APFSIMG
+if [[ "${IMAGE}" == "none" ]]; then
+    cp "${PLAIN_KC}" "${OUT_KC}"
+else
+    python3 "${SCRIPT_DIR}/../../scripts/kc-add-segment.py" \
+        "${PLAIN_KC}" "${IMAGE}" "${OUT_KC}" __APFSIMG
+fi
 
 ls -l "${OUT_KC}"

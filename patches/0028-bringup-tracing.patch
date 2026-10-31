@@ -468,16 +468,16 @@ index 949728f..74a44e9 100644
 +		kern_return_t crossxnu_kr;
 +
 +		/*
-+		 * Our RAM-backed block device comes first: it publishes an
++		 * Our block device comes first: it publishes an
 +		 * IOBlockStorageDevice, IOStorageFamily's generic driver turns
 +		 * that into an IOMedia, and only then has APFS something to
 +		 * mount.  Its kmod start() builds the device and registers it, so
 +		 * no personality has to match for this to happen.
 +		 */
 +		crossxnu_kr = OSKextLoadKextWithIdentifier(
-+		    "com.crossxnu.driver.CrossXnuRAMStorage");
++		    "com.crossxnu.driver.CrossXnuBlockStorage");
 +		bsd_init_kprintf("crossxnu: OSKextLoadKextWithIdentifier("
-+		    "com.crossxnu.driver.CrossXnuRAMStorage) -> %d\n", crossxnu_kr);
++		    "com.crossxnu.driver.CrossXnuBlockStorage) -> %d\n", crossxnu_kr);
 +
 +		/*
 +		 * The target: Apple's APFS, taken from the KDK (a normal
