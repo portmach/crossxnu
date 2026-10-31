@@ -930,3 +930,45 @@ kext'ов-поставщиков из того же KDK (kc-builder умеет �
 Осталось: (1) построить замыкание зависимостей по KDK, (2) собрать KC с
 `apfs`, (3) загрузить и посмотреть, регистрируется ли `com.apple.filesystems.apfs`
 в VFS.
+### 8.8 Бисекция: панику даёт именно apfs
+
+Проверено на одном и том же ядре (с хуком, но хук срабатывает позже места
+падения):
+
+| KC содержит | Результат |
+|:--|:--|
+| `hello.kext` | грузится, kext стартует |
+| `IOStorageFamily.kext` (KDK) | грузится, kext регистрируется |
+| `apfs.kext` (KDK) | паника до регистрации kext'ов |
+| `apfs` codeless (только plist) | EFI-загрузчик отвергает: `failed to compute vm range: Compromised Data` |
+
+Паника одинаковая во всех «apfs-с-кодом» вариантах:
+
+```
+VM bootstrap done: 69 maps, 105 entries and 10 nodes left
+panic: Kernel trap, type 14=page fault, CR2: 0xba
+RIP: 0xffffff800038be54 -> _vm_pre_fault_with_info +0x1a4  (via _vm_fault)
+```
+
+Строки `can't perform kext scan: no kext summary` и `NULL thread->t_tro` —
+это уже печать паники (символизация по kext summary и валидация указателя),
+а не причина.
+
+Важно: падение происходит **до** регистрации kext'ов, сразу после
+`VM bootstrap done`, то есть в коде инициализации ядра, который исполняется
+до `standard timeslicing quantum`. В этом месте `startup.c` вызывает
+`OSKextRemoveKextBootstrap()` — «выбросить сегменты, использованные для
+загрузки kext'ов: KLD, PRELINK symtab, LINKEDIT и symtab». Это первый
+подозреваемый: kc-builder переставил `__LINKEDIT` ядра за большой
+`__PRELINK_TEXT` apfs (0x141b000), и освобождение диапазонов может задеть
+ещё нужные страницы.
+
+Следующие шаги:
+
+1. Инструментировать `OSKextRemoveKextBootstrap()` / `kernel_bootstrap_log`,
+   чтобы увидеть точку отказа (и заодно проверить, печатает ли `-v`
+   bootstrap-логи).
+2. Собрать KC с apfs, размещённым по другому адресу (`-kext-vmbase`), чтобы
+   понять, зависит ли паника от раскладки, а не от содержимого kext'а.
+3. Отдельно починить EFI-загрузчик: KC без `__PRELINK_TEXT` (codeless)
+   сейчас отвергается как «Compromised Data».
