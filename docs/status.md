@@ -891,3 +891,42 @@ IOStorageFamily и т.п.).
 
 Пока не решён этот вопрос, «официальный APFS» через ретаргетинг не
 собирается, и вариант 2 остаётся исследовательским, а не инженерным.
+### 8.7 KDK как источник непрелинкованного APFS (найдено решение)
+
+KDK (Kernel Debug Kit) 26.7.2 build 25G332 распакован без macOS-инструментов:
+
+```
+7z x Kernel_Debug_Kit_26.7.2_build_25G332.dmg     # LZFSE -> HFS
+bsdtar -xf "Kernel Debug Kit/KernelDebugKit.pkg"  # xar -> KDK.pkg/Payload
+python3 tools/kext-loader/kdk-payload-decode.py KDK.pkg/Payload > payload.cpio
+bsdtar -xf payload.cpio "./System/Library/Extensions/apfs.kext"
+```
+
+Payload — `pbzx`, но вариант с 16-байтовым заголовком блока
+`(u64 uncompressed, u64 compressed)` и **stored-блоками** (не-xz, odc-cpio
+как есть). Декодер: `tools/kext-loader/kdk-payload-decode.py`
+(295 xz + 3 stored блока → 4.7 ГБ cpio, 8043 записи).
+
+В KDK лежит `System/Library/Extensions/apfs.kext` с **настоящим бинарём**
+(universal x86_64 + arm64e). После `lipo -thin x86_64`:
+
+```
+Mach-O 64-bit x86_64 kext bundle, NOUNDEFS|DYLDLINK|TWOLEVEL
+__TEXT 0x1bb000, __DATA 0xa000, __DATA_CONST 0x9000, __LINKEDIT 0x84a50
+dysymtab: extrel=14055 locrel=1942, nundef=1257
+```
+
+То есть это **не prelinked kext: релокации на месте**, и наш `kc-builder`
+(с фиксом `LC_DYSYMTAB` из §8.3) может его линковать штатно — ретаргетинг
+(§8.6) не нужен.
+
+Проверка покрытия символов нашим ядром: из 1257 импортов **1072 уже есть**,
+185 приходят из соседних kext'ов (`IOMediaBSDClient::*`,
+`CoreAnalyticsHub::*`, …). Значит для сборки нужен замыкающий набор
+kext'ов-поставщиков из того же KDK (kc-builder умеет несколько `-kext` и
+мержит символы по порядку), после чего — сборка KC и загрузка тем же
+путём, что `hello.kext`.
+
+Осталось: (1) построить замыкание зависимостей по KDK, (2) собрать KC с
+`apfs`, (3) загрузить и посмотреть, регистрируется ли `com.apple.filesystems.apfs`
+в VFS.
