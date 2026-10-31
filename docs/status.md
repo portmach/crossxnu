@@ -1125,3 +1125,96 @@ segments:        5
 3. **Другой KDK** (старше, где есть x86_64-варианты нужных kext'ов) — не
    решает проблему `IOMedia`, только набор драйверов.
 
+## 11. APFS-контейнер смонтирован с RAM-устройства (2026-10-31)
+
+Блокер из §10.4 закрыт вариантом 1: свой kext, который публикует блочное
+устройство поверх памяти ядра. `apfs` теперь **монтирует контейнер**, и
+загрузка идёт дальше в userland.
+
+```
+CrossXnuRAMStorage: 8388608 bytes at <ptr>, 2048 blocks of 4096
+apfs_module_start:3724: load: com.apple.filesystems.apfs, v2811.160.7 ...
+dev_init:299: disk0 device_handle block size 4096 block count 2048 features 0 internal
+nx_mount:1230: disk0 initializing cache w/hash_size 8192 and cache size 32768
+nx_mount:1548: disk0 checkpoint search: largest xid 1, best xid 1 @ 1
+nx_mount:1575: disk0 stable checkpoint indices: desc 0 data 0
+```
+
+`disk0` здесь — это наш kext: `IOBlockStorageDevice` → `IOBlockStorageDriver`
+→ `IOMedia` → `AppleAPFSContainerSchemeWholeDisk` → `nx_mount`. Ни PCI, ни
+ACPI, ни работы с физической памятью: образ APFS лежит сегментом в самой
+коллекции.
+
+### 11.1 Как это устроено
+
+| Слой | Что сделано |
+|:--|:--|
+| Образ | `__APFSIMG` — сегмент коллекции (`scripts/kc-add-segment.py`), RWX; загрузчик мапит его как любую другую часть KC |
+| Доступ | kext ищет сегмент через `getsegbyname("__APFSIMG")` — тот же вызов, что и `bsd_init.c` для `__ROOTIMG`, так что адрес сразу является VA ядра |
+| Устройство | `tools/rammedia-kext/rammedia.cpp`: `IOBlockStorageDevice` над этим буфером, блок 4096 |
+| Публикация | kmod `start()` сам создаёт объект, делает `attach(IOService::getResourceService())` и `registerService()`; `bsd_init.c` просит OSKext загрузить kext по идентификатору прямо перед APFS |
+| Медиа | `IOBlockStorageDriver` из `IOStorageFamily` матчится по `device-type=Generic` и создаёт `IOMedia` (`Whole`) |
+| Заголовки | `IOKit/storage/*` берутся из SDK (`tools/kext-loader/fetch-sdk-headers.ps1`) в `build/sdk-ext`; в репозиторий не попадают |
+
+### 11.2 Проверка совместимости заголовков (ABI)
+
+Заголовки — из SDK 10.15, а классы — из KDK 26.7.2, поэтому размеры сверены
+по самому KDK: каждый класс регистрирует свой размер в `OSMetaClass`, значит
+число зашито в статический инициализатор (`tools/kext-loader/kext-class-size.py`).
+
+```
+$ kext-class-size.py .../IOStorageFamily
+IOBlockStorageDevice                          144   0x90
+IOBlockStorageDriver                          344   0x158
+
+$ размеры, которые даёт наш компилятор с заголовками SDK и заголовками ядра
+IOStorage                   144   0x90
+IOMedia                     208   0xd0
+IOBlockStorageDevice        144   0x90
+IOBlockStorageDriver        344   0x158
+```
+
+Совпадает: подобъект не перерос базовый класс, значит размеры и раскладка
+объектов те же, что у боевого `IOStorageFamily`. Порядок виртуальных функций
+стабилен по правилам Apple — новые слоты занимают `Reserved*` в конце.
+
+### 11.3 Роли томов
+
+`mkapfs` создаёт том с ролью NONE. Роль — это `u16` в суперблоке тома
+(`apfs_superblock.apfs_role`, смещение 0x3C4) под защитой Fletcher-64,
+поэтому `tools/kext-loader/apfs-set-role.py` правит поле и пересчитывает
+контрольную сумму; `apfsck` из apfsprogs на исправленном образе проходит
+без замечаний.
+
+```bash
+tools/kext-loader/apfs-set-role.py build/apfs8.img --role system
+tools/kext-loader/apfs-set-role.py build/apfs8.img --show
+```
+
+### 11.4 Что осталось до launchd
+
+Контейнер смонтирован, но **том — ещё нет**, и launchd это видит:
+
+```
+Not booted from APFS, skipping apfs_boot_util
+<Error>: fsctl(APFSIOC_GET_DEV_BY_ROLE) error: 2
+```
+
+То есть:
+
+1. Нужно смонтировать сам том (VFS `mount("apfs", ...)` по `/dev/disk0`).
+   В macOS это делает launchd/`apfs_boot_util`, но только когда корень уже
+   APFS, а у нас корень — HFS+ (`md0`), поэтому ветка пропускается.
+2. Для `APFSIOC_GET_DEV_BY_ROLE` нужен **смонтированный** том с ролью
+   System/Data: сейчас том не материализован, отсюда ENOENT.
+3. Том пустой: `mkapfs` умеет только форматировать. Для настоящего launchd
+   нужен заполненный System-том (перенос userland из recovery-ramdisk в APFS),
+   а apfsprogs пока не умеет писать файлы.
+
+Порядок дальше: смонтировать пустой том (доказать, что `apfs_vfsop_mount`
+работает на нашем устройстве) → затем решать, чем наполнять System-том.
+
+Заодно поправлено: `kc-add-rootimg.py` стал обёрткой над общим
+`kc-add-segment.py` (имя сегмента — параметр), а хук в `bsd_init.c`
+(патч `0028`) теперь грузит наш kext перед APFS.
+
