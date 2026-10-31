@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/i386/systemcalls.c b/bsd/dev/i386/systemcalls.c
-index a352414..22e7efc 100644
+index a352414..d3b3a0e 100644
 --- a/bsd/dev/i386/systemcalls.c
 +++ b/bsd/dev/i386/systemcalls.c
-@@ -59,6 +59,129 @@
+@@ -59,6 +59,143 @@
  
  #if CONFIG_MACF
  #include <security/mac_framework.h>
@@ -20,34 +20,41 @@ index a352414..22e7efc 100644
 +void
 +crossxnu_trace_pid1(const char *what, uint64_t a, uint64_t b)
 +{
-+	static int nsys, nmach, nfork;
++	static int nsys, nmach, nfork, nline;
 +	struct proc *cp = current_proc();
 +	uint64_t tid;
 +
-+	if (cp == NULL || cp->p_pid != 1 ||
-+	    strncmp(cp->p_comm, "launchd", 7) != 0) {
++	if (cp == NULL) {
++		return;
++	}
++	/*
++	 * crossxnu: trace pid 1 and its direct children.  The boot hangs we
++	 * chase also happen inside helpers launchd spawns (mount_hfs,
++	 * cc_fips_test, dirs_cleaner, ...), which a pid-1-only filter hides.
++	 */
++	if (cp->p_pid != 1 && cp->p_ppid != 1) {
 +		return;
 +	}
 +	tid = thread_tid(current_thread());
 +	if (what[0] == 's') {
-+		nsys++;
-+		if (nsys <= 1200) {
++		nline++;
++		if (cp->p_pid == 1 && ++nsys <= 1200) {
 +			printf("crossxnu: p1 sys %llu tid=%llu rip=0x%llx\n",
 +			    a, tid, b);
 +		} else {
-+			printf("S%llu.%llu ", a, tid);
-+			if (nsys % 8 == 0) {
++			printf("S%llu.%d.%llu ", a, cp->p_pid, tid);
++			if (nline % 8 == 0) {
 +				printf("\n");
 +			}
 +		}
 +	} else if (what[0] == 'm') {
-+		nmach++;
-+		if (nmach <= 800) {
++		nline++;
++		if (cp->p_pid == 1 && ++nmach <= 800) {
 +			printf("crossxnu: p1 mach %llu tid=%llu rip=0x%llx\n",
 +			    a, tid, b);
 +		} else {
-+			printf("M%llu.%llu ", a, tid);
-+			if (nmach % 8 == 0) {
++			printf("M%llu.%d.%llu ", a, cp->p_pid, tid);
++			if (nline % 8 == 0) {
 +				printf("\n");
 +			}
 +		}
@@ -88,8 +95,15 @@ index a352414..22e7efc 100644
 +	size_t done = 0;
 +	int idx;
 +
-+	if (p == NULL || p->p_pid != 1 ||
-+	    strncmp(p->p_comm, "launchd", 7) != 0) {
++	if (p == NULL) {
++		return;
++	}
++	/*
++	 * crossxnu: trace pid 1 and its direct children.  The boot hangs we
++	 * chase also happen inside helpers launchd spawns (mount_hfs,
++	 * cc_fips_test, dirs_cleaner, ...), which a pid-1-only filter hides.
++	 */
++	if (p->p_pid != 1 && p->p_ppid != 1) {
 +		return;
 +	}
 +	switch (code) {
@@ -125,14 +139,14 @@ index a352414..22e7efc 100644
 +		return;
 +	}
 +	npath++;
-+	if (npath <= 500 || crossxnu_path_has_launch(buf)) {
++	if (npath <= 800 || crossxnu_path_has_launch(buf)) {
 +		printf("crossxnu: p1 path %d <%s>\n", code, buf);
 +	}
 +}
  #endif
  
  #if CONFIG_DTRACE
-@@ -308,6 +431,7 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -308,6 +445,7 @@ unix_syscall64(x86_saved_state_t *state)
  
  	code    = regs->rax & SYSCALL_NUMBER_MASK;
  	syscode = (code < nsysent) ? code : SYS_invalid;
@@ -140,7 +154,7 @@ index a352414..22e7efc 100644
  	DEBUG_KPRINT_SYSCALL_UNIX(
  		"unix_syscall64: code=%d(%s) rip=%llx\n",
  		code, syscallnames[syscode], regs->isf.rip);
-@@ -360,6 +484,9 @@ unix_syscall64(x86_saved_state_t *state)
+@@ -360,6 +498,9 @@ unix_syscall64(x86_saved_state_t *state)
  		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
  	}
  
@@ -195,10 +209,10 @@ index b306145..143e29e 100644
  	DEBUG_KPRINT_SYSCALL_MACH(
  		"mach_call_munger64: code=%d(%s)\n",
 diff --git a/osfmk/kern/bsd_kern.c b/osfmk/kern/bsd_kern.c
-index 70bdafc..1f4592a 100644
+index 70bdafc..eb86cb5 100644
 --- a/osfmk/kern/bsd_kern.c
 +++ b/osfmk/kern/bsd_kern.c
-@@ -1519,3 +1519,165 @@ kern_return_for_errno(int bsd_errno)
+@@ -1519,3 +1519,233 @@ kern_return_for_errno(int bsd_errno)
  		return KERN_FAILURE;
  	}
  }
@@ -224,6 +238,7 @@ index 70bdafc..1f4592a 100644
 +	uintptr_t conts[24];
 +	uint64_t evs[24];
 +	uint64_t sysu[24], sysm[24], csw[24];
++	int runqs[24];
 +	int n = 0, i;
 +
 +	if (task == NULL) {
@@ -244,6 +259,21 @@ index 70bdafc..1f4592a 100644
 +		sysu[n] = th->syscalls_unix;
 +		sysm[n] = th->syscalls_mach;
 +		csw[n] = th->c_switch;
++		{
++			int k;
++
++			runqs[n] = -2;
++			for (k = 0; k < MAX_CPUS; k++) {
++				if (processor_array[k] != (processor_t)0 &&
++				    processor_array[k] == th->__runq.runq) {
++					runqs[n] = k;
++					break;
++				}
++			}
++			if (runqs[n] == -2 && th->__runq.runq != (processor_t)0) {
++				runqs[n] = -1;   /* queued on some processor we cannot find */
++			}
++		}
 +		n++;
 +	}
 +	task_unlock(task);
@@ -256,12 +286,12 @@ index 70bdafc..1f4592a 100644
 +		 * "<ptr>" when the output goes to a log.
 +		 */
 +		printf("crossxnu: threads(%s):  tid=%llu tag=0x%x state=0x%x opt=0x%x "
-+		    "cont=%08x%08x ev=%08x%08x sys=%llu/%llu cs=%llu\n",
++		    "cont=%08x%08x ev=%08x%08x sys=%llu/%llu cs=%llu runq=%d\n",
 +		    where, (unsigned long long)tids[i], tags[i], states[i], opts[i],
 +		    (unsigned)(conts[i] >> 32), (unsigned)conts[i],
 +		    (unsigned)(evs[i] >> 32), (unsigned)evs[i],
 +		    (unsigned long long)sysu[i], (unsigned long long)sysm[i],
-+		    (unsigned long long)csw[i]);
++		    (unsigned long long)csw[i], runqs[i]);
 +	}
 +}
 +
@@ -364,3 +394,279 @@ index 70bdafc..1f4592a 100644
 +		    (unsigned)(q[i + 3] >> 32), (unsigned)q[i + 3]);
 +	}
 +}
++
++/* crossxnu: temporary diagnostic helper (see pthread_workqueue.c) */
++int crossxnu_thread_runnable(thread_t th);
++
++int
++crossxnu_thread_runnable(thread_t th)
++{
++	return (th->state & TH_RUN) != 0;
++}
++
++/*
++ * crossxnu: temporary bring-up diagnostic.
++ *
++ * Prints the state of every processor: its active thread, its idle thread and
++ * how many threads sit on its run queue.  Used to tell "a thread is blocked"
++ * apart from "a thread is runnable but the CPU never picks it up".
++ */
++void crossxnu_cpus_dump(const char *where);
++
++void
++crossxnu_cpus_dump(const char *where)
++{
++	processor_t cpu;
++	int i;
++
++	printf("crossxnu: cpu(%s): machine logical=%d physical=%d max=%d "
++	    "extra=%d\n", where, machine_info.logical_cpu,
++	    machine_info.physical_cpu, machine_info.logical_cpu_max, 0);
++
++	for (i = 0; i < MAX_CPUS; i++) {
++		thread_t act, idl;
++		int count = 0;
++
++		cpu = processor_array[i];
++		if (cpu == (processor_t)0) {
++			continue;
++		}
++		act = cpu->active_thread;
++		idl = cpu->idle_thread;
++		if (cpu->runq.count > 0) {
++			count = cpu->runq.count;
++		}
++		printf("crossxnu: cpu(%s): id=%d state=0x%x active=%d(st=0x%x)"
++		    ".idle=%d(st=0x%x) runq=%d urgency=%d\n", where,
++		    cpu->cpu_id, cpu->state,
++		    act != (thread_t)0 ? (int)thread_tid(act) : -1,
++		    act != (thread_t)0 ? act->state : 0,
++		    idl != (thread_t)0 ? (int)thread_tid(idl) : -1,
++		    idl != (thread_t)0 ? idl->state : 0,
++		    count, (int)cpu->runq.urgency);
++	}
++}
+diff --git a/osfmk/kern/sched_prim.c b/osfmk/kern/sched_prim.c
+index b2aae03..966c7b9 100644
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -136,6 +136,89 @@
+ struct sched_statistics PERCPU_DATA(sched_stats);
+ bool sched_stats_active;
+ 
++/*
++ * crossxnu bring-up diagnostics: a lockless ring of the most recent scheduler
++ * decisions.  The hot paths only store words here; the watchdog (BSD side)
++ * drains the ring later, once the machine is wedged and printf is safe.
++ */
++struct crossxnu_sched_entry {
++	uint64_t        cs_time;
++	uint32_t        cs_ev;
++	uint32_t        cs_tid;
++	uint32_t        cs_a;
++	uint32_t        cs_b;
++	uint32_t        cs_c;
++	uint32_t        cs_d;
++};
++
++#define CROSSXNU_SCHED_RING_SIZE        512
++#define CROSSXNU_SCHED_RING_MASK        (CROSSXNU_SCHED_RING_SIZE - 1)
++
++static struct crossxnu_sched_entry crossxnu_sched_ring[CROSSXNU_SCHED_RING_SIZE];
++static unsigned int crossxnu_sched_ring_next;
++static unsigned int crossxnu_sched_dump_next;
++
++void crossxnu_sched_dump(const char *where);
++
++/* event codes, kept in sync with the dump formatting below */
++#define CXSE_SETRUN     1       /* thread_setrun: tid, pri, options, runq, state */
++#define CXSE_PSETRUN    2       /* processor_setrun: tid, pri, cur_pri, preempt, action, pstate */
++#define CXSE_SELECT     3       /* thread_select entry: tid, reason, cur_pri, state */
++#define CXSE_SELOUT     4       /* thread_select outcome: tid, outcome, main, bound, highq */
++#define CXSE_INVOKE     5       /* thread_invoke: self, new, reason, self state */
++#define CXSE_IDLE       6       /* processor_idle entry: tid, state, main, bound */
++#define CXSE_IDLEBRK    7       /* processor_idle break: reason, main, bound, state */
++#define CXSE_DISPATCH   8       /* thread_dispatch: old, new, still_runnable, options */
++#define CXSE_IPI        9       /* sched_ipi_perform: cpu, type */
++#define CXSE_STEAL      10      /* steal attempt: found tid, main, bound */
++
++static inline void
++crossxnu_sched_log(uint32_t ev, uint32_t tid, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
++{
++	unsigned int i = crossxnu_sched_ring_next & CROSSXNU_SCHED_RING_MASK;
++	struct crossxnu_sched_entry *e = &crossxnu_sched_ring[i];
++
++	e->cs_time = mach_absolute_time();
++	e->cs_ev   = ev;
++	e->cs_tid  = tid;
++	e->cs_a    = a;
++	e->cs_b    = b;
++	e->cs_c    = c;
++	e->cs_d    = d;
++	crossxnu_sched_ring_next = i + 1;
++}
++
++void
++crossxnu_sched_dump(const char *where)
++{
++	static const char *const ev_names[] = {
++		"?", "setrun", "psetrun", "select", "selout",
++		"invoke", "idle", "idlebrk", "dispatch", "ipi", "steal"
++	};
++	unsigned int next = crossxnu_sched_ring_next;
++	unsigned int start;
++	unsigned int n;
++
++	if (next - crossxnu_sched_dump_next > CROSSXNU_SCHED_RING_SIZE) {
++		crossxnu_sched_dump_next = next - CROSSXNU_SCHED_RING_SIZE;
++	}
++	start = crossxnu_sched_dump_next;
++	n = next - start;
++
++	printf("crossxnu: sched ring (%s): %u new events, %u total\n",
++	    where, n, next);
++	for (unsigned int k = 0; k < n; k++) {
++		unsigned int idx = (start + k) & CROSSXNU_SCHED_RING_MASK;
++		struct crossxnu_sched_entry *e = &crossxnu_sched_ring[idx];
++		const char *name = (e->cs_ev < sizeof(ev_names) / sizeof(ev_names[0])) ?
++		    ev_names[e->cs_ev] : "?";
++
++		printf("crossxnu: sched %05u t=%llu %-8s tid=%u a=%u b=%u c=%u d=%u\n",
++		    idx, e->cs_time, name, e->cs_tid, e->cs_a, e->cs_b, e->cs_c, e->cs_d);
++	}
++	crossxnu_sched_dump_next = next;
++}
++
+ TUNABLE(bool, cpulimit_affects_quantum, "cpulimit_affects_quantum", true);
+ 
+ TUNABLE(uint32_t, nonurgent_preemption_timer_us, "nonurgent_preemption_timer", 50); /* microseconds */
+@@ -2444,6 +2527,11 @@ thread_select(thread_t          thread,
+ 	assert(processor == current_processor());
+ 	assert((thread->state & (TH_RUN | TH_TERMINATE2)) == TH_RUN);
+ 
++	crossxnu_sched_log(CXSE_SELECT, (uint32_t)thread_tid(thread),
++	    (uint32_t)*reason, processor->current_pri,
++	    (uint32_t)SCHED(processor_runq_count)(processor),
++	    (uint32_t)processor->state);
++
+ 	KTRC(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_THREAD_SELECT) | DBG_FUNC_START,
+ 	    0, pset->pending_AST_URGENT_cpu_mask, 0, 0);
+ 
+@@ -2820,6 +2908,10 @@ send_followup_ipi_before_idle:
+ 
+ 		/* No RT threads, so let's look at the regular threads. */
+ 		if ((new_thread = SCHED(choose_thread)(processor, MINPRI, current_thread_can_keep_running ? thread : THREAD_NULL, *reason)) != THREAD_NULL) {
++			crossxnu_sched_log(CXSE_SELOUT, (uint32_t)thread_tid(new_thread),
++			    (uint32_t)SCHED(processor_runq_count)(processor),
++			    (uint32_t)SCHED(processor_bound_count)(processor),
++			    current_thread_can_keep_running, 1);
+ 			if (new_thread != thread) {
+ 				/* Going to context-switch */
+ 				select_outcome = SELECT_NEW;
+@@ -2936,6 +3028,10 @@ send_followup_ipi_before_idle:
+ 		}
+ 
+ 		/* We didn't find anything, go idle. */
++		crossxnu_sched_log(CXSE_SELOUT, 0,
++		    (uint32_t)SCHED(processor_runq_count)(processor),
++		    (uint32_t)SCHED(processor_bound_count)(processor),
++		    current_thread_can_keep_running, 0);
+ 		break;
+ 	} while (true);
+ 
+@@ -2943,6 +3039,10 @@ send_followup_ipi_before_idle:
+ 		/* This thread is the only runnable (non-idle) thread */
+ 		select_outcome = SELECT_CURRENT_NO_STEAL;
+ 
++		crossxnu_sched_log(CXSE_SELOUT, (uint32_t)thread_tid(thread),
++		    (uint32_t)SCHED(processor_runq_count)(processor),
++		    (uint32_t)SCHED(processor_bound_count)(processor), 1, 2);
++
+ 		if (thread->sched_pri >= BASEPRI_RTQUEUES) {
+ 			processor->deadline = thread->realtime.deadline;
+ 		} else {
+@@ -3046,6 +3146,10 @@ thread_invoke(
+ 	thread_assert_runq_null(self);
+ 	assert((self->state & (TH_RUN | TH_TERMINATE2)) == TH_RUN);
+ 
++	crossxnu_sched_log(CXSE_INVOKE, (uint32_t)thread_tid(self),
++	    (uint32_t)thread_tid(thread), (uint32_t)reason,
++	    (uint32_t)self->state, (uint32_t)(continuation != NULL));
++
+ 	thread_lock(thread);
+ 
+ 	assert_thread_magic(thread);
+@@ -3667,6 +3771,9 @@ thread_dispatch(
+ 				}
+ 				options |= SCHED_CSW;
+ 
++				crossxnu_sched_log(CXSE_DISPATCH, (uint32_t)thread_tid(thread),
++				    (uint32_t)thread_tid(self), (uint32_t)reason,
++				    (uint32_t)options, (uint32_t)thread->state);
+ 				thread_setrun(thread, options);
+ 
+ 				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+@@ -4502,6 +4609,8 @@ sched_ipi_policy(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi
+ void
+ sched_ipi_perform(processor_t dst, sched_ipi_type_t ipi)
+ {
++	crossxnu_sched_log(CXSE_IPI, (uint32_t)dst->cpu_id, (uint32_t)ipi, 0, 0, 0);
++
+ 	switch (ipi) {
+ 	case SCHED_IPI_NONE:
+ 		break;
+@@ -4608,6 +4717,10 @@ processor_setrun(
+ 		}
+ 	}
+ 
++	crossxnu_sched_log(CXSE_PSETRUN, (uint32_t)thread_tid(thread),
++	    thread->sched_pri, processor->current_pri, (uint32_t)preempt,
++	    ((uint32_t)processor->state << 8) | (uint32_t)ipi_action);
++
+ 	if (ipi_action != eDoNothing) {
+ 		if (processor == current_processor()) {
+ 			if (ipi_action == eExitIdle) {
+@@ -4636,7 +4749,6 @@ processor_setrun(
+ 
+ 	pset_unlock(pset);
+ 	sched_ipi_perform(processor, ipi_type);
+-
+ 	if (ipi_action != eDoNothing && processor == current_processor()) {
+ 		ast_t new_preempt = update_pending_nonurgent_preemption(processor, preempt);
+ 		ast_on(new_preempt);
+@@ -5627,6 +5739,11 @@ thread_setrun(
+ 	if (thread->bound_processor == PROCESSOR_NULL) {
+ 		SCHED(check_spill)(pset, thread);
+ 	}
++
++	crossxnu_sched_log(CXSE_SETRUN, (uint32_t)thread_tid(thread),
++	    thread->sched_pri, (uint32_t)options,
++	    (uint32_t)SCHED(processor_runq_count)(processor),
++	    (uint32_t)thread->state);
+ }
+ 
+ processor_set_t
+@@ -6445,6 +6562,11 @@ processor_idle(
+ 	    MACHDBG_CODE(DBG_MACH_SCHED, MACH_IDLE) | DBG_FUNC_START,
+ 	    (uintptr_t)thread_tid(thread), 0, 0, 0, 0);
+ 
++	crossxnu_sched_log(CXSE_IDLE, (uint32_t)thread_tid(thread),
++	    (uint32_t)processor->state,
++	    (uint32_t)SCHED(processor_runq_count)(processor),
++	    (uint32_t)SCHED(processor_bound_count)(processor), 0);
++
+ 	SCHED_STATS_INC(idle_transitions);
+ 	assert(processor->running_timers_active == false);
+ 
+@@ -6563,6 +6685,11 @@ processor_idle(
+ 	recount_processor_run(&processor->pr_recount, &snap);
+ 	smr_cpu_join(processor, snap.rsn_time_mach);
+ 
++	crossxnu_sched_log(CXSE_IDLEBRK, (uint32_t)break_reason,
++	    (uint32_t)SCHED(processor_runq_count)(processor),
++	    (uint32_t)SCHED(processor_bound_count)(processor),
++	    (uint32_t)processor->state, (uint32_t)thread_tid(thread));
++
+ 	ast_t reason = AST_NONE;
+ 
+ 	/* We're handling all scheduling AST's */

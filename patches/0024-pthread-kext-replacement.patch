@@ -1,5 +1,5 @@
 diff --git a/bsd/pthread/pthread_shims.c b/bsd/pthread/pthread_shims.c
-index 49fb60b..9b016cd 100644
+index 49fb60b..80dddbc 100644
 --- a/bsd/pthread/pthread_shims.c
 +++ b/bsd/pthread/pthread_shims.c
 @@ -60,6 +60,14 @@
@@ -27,7 +27,7 @@ index 49fb60b..9b016cd 100644
  #define PTHREAD_STRUCT_ACCESSOR(get, set, rettype, structtype, member) \
  	static rettype \
  	get(structtype x) { \
-@@ -312,36 +323,775 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
+@@ -312,36 +323,780 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
  
  /* kernel (core) to kext shims */
  
@@ -518,7 +518,7 @@ index 49fb60b..9b016cd 100644
 +	if (events == 0 || nevents < 0) {
 +		events = sc.eventlist;
 +		nevents = 0;
- 	}
++	}
 +
 +	error = kevent_workq_internal(p, 0, 0, events, nevents, sc.data_out,
 +	    &data_available, KEVENT_FLAG_STACK_DATA | KEVENT_FLAG_IMMEDIATE |
@@ -707,7 +707,7 @@ index 49fb60b..9b016cd 100644
 +			nkevents = 0;
 +			keventlist = sc.eventlist;
 +		}
-+	}
+ 	}
 +
 +	memset(&state, 0, sizeof(state));
 +	state.rip = proc_get_wqthread(p);
@@ -718,6 +718,11 @@ index 49fb60b..9b016cd 100644
 +	state.rcx = keventlist;         /* [kqid][kevent...] */
 +	state.r8  = (uint64_t)(uint32_t)(upcall_flags | CROSSXNU_WQ_FLAG_THREAD_TSD_BASE_SET);
 +	state.r9  = (uint64_t)(uint32_t)nkevents;
++
++	/* crossxnu: a thread with work is not idle: keep it off wq_thidlelist */
++	if (nkevents > 0 && (setup_flags & CROSSXNU_WQ_SETUP_EXIT_THREAD) == 0) {
++		crossxnu_workq_thread_will_run(p, get_bsdthread_info(th));
++	}
 +
 +	if ((setup_flags & CROSSXNU_WQ_SETUP_EXIT_THREAD) == 0 && nkevents > 0) {
 +		printf("crossxnu: workq_setup_thread: pid=%d tid=%llu events=%d "
@@ -813,7 +818,7 @@ index 49fb60b..9b016cd 100644
  	pthread_functions->pth_proc_hashdelete(p);
  }
  
-@@ -349,12 +1099,16 @@ pth_proc_hashdelete(proc_t p)
+@@ -349,12 +1104,16 @@ pth_proc_hashdelete(proc_t p)
  int
  bsdthread_create(struct proc *p, struct bsdthread_create_args *uap, user_addr_t *retval)
  {
@@ -830,7 +835,7 @@ index 49fb60b..9b016cd 100644
  	kern_return_t kr;
  	static_assert(offsetof(struct bsdthread_register_args, threadstart) + sizeof(user_addr_t) ==
  	    offsetof(struct bsdthread_register_args, wqthread));
-@@ -377,6 +1131,8 @@ bsdthread_register(struct proc *p, struct bsdthread_register_args *uap, __unused
+@@ -377,6 +1136,8 @@ bsdthread_register(struct proc *p, struct bsdthread_register_args *uap, __unused
  int
  bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_t *retval)
  {
@@ -839,7 +844,7 @@ index 49fb60b..9b016cd 100644
  	thread_t th = current_thread();
  	uthread_t uth = current_uthread();
  	struct _bsdthread_terminate *bts = &uth->uu_save.uus_bsdthread_terminate;
-@@ -385,6 +1141,8 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
+@@ -385,6 +1146,8 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
  	uint16_t tag = thread_get_tag(th);
  
  	if (tag & THREAD_TAG_WORKQUEUE) {
@@ -848,7 +853,7 @@ index 49fb60b..9b016cd 100644
  		workq_thread_terminate(p, get_bsdthread_info(th));
  	} else if (tag & THREAD_TAG_AIO_WORKQUEUE) {
  		return ENOTSUP;
-@@ -413,6 +1171,12 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
+@@ -413,6 +1176,12 @@ bsdthread_terminate(struct proc *p, struct bsdthread_terminate_args *uap, int32_
  int
  thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t *retval)
  {
@@ -861,7 +866,7 @@ index 49fb60b..9b016cd 100644
  	return pthread_functions->thread_selfid(p, retval);
  }
  
-@@ -421,54 +1185,72 @@ thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t
+@@ -421,54 +1190,72 @@ thread_selfid(struct proc *p, __unused struct thread_selfid_args *uap, uint64_t
  int
  psynch_mutexwait(proc_t p, struct psynch_mutexwait_args *uap, uint32_t *retval)
  {
@@ -934,7 +939,7 @@ index 49fb60b..9b016cd 100644
  	return pthread_functions->psynch_rw_unlock(p, uap->rwlock, uap->lgenval, uap->ugenval, uap->rw_wc, uap->flags, retval);
  }
  
-@@ -481,24 +1263,32 @@ psynch_rw_unlock2(__unused proc_t p, __unused struct psynch_rw_unlock2_args *uap
+@@ -481,24 +1268,32 @@ psynch_rw_unlock2(__unused proc_t p, __unused struct psynch_rw_unlock2_args *uap
  int
  psynch_rw_wrlock(proc_t p, struct psynch_rw_wrlock_args *uap, uint32_t *retval)
  {
@@ -967,7 +972,7 @@ index 49fb60b..9b016cd 100644
  	return 0;
  }
  
-@@ -634,7 +1424,17 @@ static const struct pthread_callbacks_s pthread_callbacks = {
+@@ -634,7 +1429,17 @@ static const struct pthread_callbacks_s pthread_callbacks = {
  };
  
  SECURITY_READ_ONLY_LATE(pthread_callbacks_t) pthread_kern = &pthread_callbacks;
@@ -987,7 +992,7 @@ index 49fb60b..9b016cd 100644
  /*
   * pthread_kext_register is called by pthread.kext upon load, it has to provide
 diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
-index cb27db6..4b361ef 100644
+index cb27db6..265fcb4 100644
 --- a/bsd/pthread/pthread_workqueue.c
 +++ b/bsd/pthread/pthread_workqueue.c
 @@ -226,8 +226,23 @@ wq_limit_cooperative_threads_for_proc SYSCTL_HANDLER_ARGS
@@ -1014,7 +1019,35 @@ index cb27db6..4b361ef 100644
  	}
  
  out:
-@@ -953,6 +968,85 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+@@ -892,6 +907,8 @@ workq_should_kill_idle_thread(struct workqueue *wq, struct uthread *uth,
+ static void
+ workq_death_call_schedule(struct workqueue *wq, uint64_t deadline)
+ {
++	/* crossxnu: experiment: never reap idle threads */
++	return;
+ 	uint32_t wq_flags = os_atomic_load(&wq->wq_flags, relaxed);
+ 
+ 	if (wq_flags & (WQ_EXITING | WQ_DEATH_CALL_SCHEDULED)) {
+@@ -939,6 +956,18 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+ 	uint64_t delay = workq_kill_delay_for_idle_thread(wq);
+ 
+ 	if (now - uth->uu_save.uus_workq_park_data.idle_stamp > delay) {
++		/*
++		 * crossxnu: a thread that is already runnable has work waiting
++		 * for it (a kevent wakeup can leave the uthread on the idle list
++		 * while its machine thread is TH_RUN).  Marking it dying would
++		 * throw that work away and freeze the workloop, so defer the
++		 * death decision instead.
++		 */
++		if (crossxnu_thread_runnable(get_machthread(uth))) {
++			workq_death_call_schedule(wq,
++			    uth->uu_save.uus_workq_park_data.idle_stamp + delay);
++			return;
++		}
+ 		WQ_TRACE_WQ(TRACE_wq_thread_terminate | DBG_FUNC_START,
+ 		    wq, wq->wq_thidlecount, 0, 0);
+ 		wq->wq_thdying_count++;
+@@ -953,6 +982,129 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
  	    uth->uu_save.uus_workq_park_data.idle_stamp + delay);
  }
  
@@ -1054,27 +1087,71 @@ index cb27db6..4b361ef 100644
 + * exact blocking primitive (mach_msg, kevent, ulock, ...).
 + */
 +extern void crossxnu_threads_dump(struct proc *p, const char *where);
++extern int crossxnu_thread_runnable(thread_t th);
++
++
++/*
++ * crossxnu: collector for the all-process watchdog dump.
++ */
++static struct {
++	pid_t pids[16];
++	int n;
++} wd_list;
++
++static int
++crossxnu_wd_collect(proc_t p, void *arg __unused)
++{
++	if (wd_list.n < (int)(sizeof(wd_list.pids) / sizeof(wd_list.pids[0]))) {
++		wd_list.pids[wd_list.n++] = proc_getpid(p);
++	}
++	return 0;
++}
 +
 +static thread_call_t crossxnu_wd_call;
 +
 +static void
 +crossxnu_wd_dump(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
 +{
-+	proc_t p = proc_find(1);
 +	uint64_t now, delta, deadline;
++	int i;
++	proc_t p;
 +
-+	if (p == NULL) {
-+		printf("crossxnu: wd: pid 1 is gone\n");
-+		return;
-+	}
-+	crossxnu_threads_dump(p, "watchdog");
-+	crossxnu_workq_dump(p, NULL, "watchdog");
++	/*
++	 * crossxnu: dump every process, not just pid 1.  The boot also hangs
++	 * inside the children launchd spawns (mount_hfs, cc_fips_test, ...),
++	 * and a pid-1-only dump hides where those are parked.
++	 */
++	proc_iterate(PROC_ALLPROCLIST | PROC_NOWAITTRANS, crossxnu_wd_collect,
++	    &wd_list, NULL, NULL);
 +	{
-+		extern void crossxnu_dispatch_dump(struct proc *p, const char *where);
++		extern void crossxnu_cpus_dump(const char *where);
++		extern void crossxnu_sched_dump(const char *where);
 +
-+		crossxnu_dispatch_dump(p, "watchdog");
++		crossxnu_cpus_dump("watchdog");
++		crossxnu_sched_dump("watchdog");
 +	}
-+	proc_rele(p);
++
++	for (i = 0; i < wd_list.n; i++) {
++		if (wd_list.pids[i] == 0) {
++			continue;   /* kernel_task: not interesting here */
++		}
++		p = proc_find(wd_list.pids[i]);
++		if (p == NULL) {
++			continue;
++		}
++		crossxnu_threads_dump(p,
++		    wd_list.pids[i] == 1 ? "watchdog" : "watchdog-child");
++		if (wd_list.pids[i] == 1) {
++			crossxnu_workq_dump(p, NULL, "watchdog");
++			{
++				extern void crossxnu_dispatch_dump(struct proc *p,
++				    const char *where);
++
++				crossxnu_dispatch_dump(p, "watchdog");
++			}
++		}
++		proc_rele(p);
++	}
 +
 +	if (crossxnu_wd_call != NULL) {
 +		now = mach_absolute_time();
@@ -1100,11 +1177,127 @@ index cb27db6..4b361ef 100644
  void
  workq_thread_terminate(struct proc *p, struct uthread *uth)
  {
+@@ -1170,6 +1322,50 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
+ 	thread_qos_t qos = workq_pri_override(uth->uu_workq_pri);
+ 	bool first_use = uth->uu_workq_flags & UT_WORKQ_NEW;
+ 
++	/*
++	 * crossxnu: temporary bring-up diagnostic.
++	 *
++	 * This is the workqueue death path: the thread is told to go back to
++	 * userspace and exit (WQ_SETUP_EXIT_THREAD).  If the thread is still
++	 * TH_RUN or is on the run list at this point, the kernel is tearing down
++	 * a thread that is still doing work, which would explain launchd
++	 * freezing mid-block.
++	 */
++	{
++		thread_t kth = get_machthread(uth);
++		extern int crossxnu_thread_runnable(thread_t th);
++		struct uthread *it;
++		const char *where = "none";
++
++		TAILQ_FOREACH(it, &wq->wq_thrunlist, uu_workq_entry) {
++			if (it == uth) {
++				where = "runlist";
++				break;
++			}
++		}
++		if (where[0] == 'n') {
++			TAILQ_FOREACH(it, &wq->wq_thidlelist, uu_workq_entry) {
++				if (it == uth) {
++					where = "idlelist";
++					break;
++				}
++			}
++		}
++		if (where[0] == 'n') {
++			TAILQ_FOREACH(it, &wq->wq_thnewlist, uu_workq_entry) {
++				if (it == uth) {
++					where = "newlist";
++					break;
++				}
++			}
++		}
++		printf("crossxnu: wq death: pid=%d tid=%llu state=0x%x list=%s "
++		    "first_use=%d flags=0x%x nthreads=%u idle=%u df=0x%x sf=0x%x\n",
++		    proc_getpid(p), (unsigned long long)thread_tid(kth),
++		    -1, where, first_use, uth->uu_workq_flags,
++		    wq->wq_nthreads, wq->wq_thidlecount, death_flags, setup_flags);
++	}
++
+ 	if (qos > WORKQ_THREAD_QOS_CLEANUP) {
+ 		workq_thread_reset_pri(wq, uth, NULL, /*unpark*/ true);
+ 		qos = WORKQ_THREAD_QOS_CLEANUP;
+@@ -1203,6 +1399,8 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
+ 		flags |= WQ_FLAG_THREAD_REUSE;
+ 	}
+ 
++
++
+ 	pthread_functions->workq_setup_thread(p, th, vmap, uth->uu_workq_stackaddr,
+ 	    uth->uu_workq_thport, 0, WQ_SETUP_EXIT_THREAD, flags);
+ 	__builtin_unreachable();
+@@ -5331,3 +5529,55 @@ workq_init(void)
+ 	thread_deallocate_daemon_register_queue(&workq_deallocate_queue,
+ 	    workq_deallocate_queue_invoke);
+ }
++
++/*
++ * crossxnu: a thread that is about to be handed work must not stay on the
++ * workqueue idle list.
++ *
++ * The death policy reaps threads from wq_thidlelist, and a thread that was
++ * woken for a workloop event can still be sitting there with its machine
++ * thread already in TH_RUN.  The death callout then pops it and sends the
++ * EXIT_THREAD upcall, throwing the already delivered work away: libpthread
++ * kills the thread instead of running the event, the workloop never
++ * completes, and the process freezes with no pending work and no syscalls
++ * (observed with launchd right after "logging initialized").
++ *
++ * Popping the thread here (the analogue of workq_pop_idle_thread()) makes the
++ * kernel's own bookkeeping agree with reality: a thread with work is not idle.
++ * XNU puts it back on the idle list when it parks again.
++ */
++void
++crossxnu_workq_thread_will_run(struct proc *p, struct uthread *uth)
++{
++	struct workqueue *wq = proc_get_wqptr_fast(p);
++	struct uthread *it;
++
++	if (wq == NULL || uth == NULL) {
++		return;
++	}
++
++	workq_lock_spin(wq);
++	TAILQ_FOREACH(it, &wq->wq_thidlelist, uu_workq_entry) {
++		if (it == uth) {
++			TAILQ_REMOVE(&wq->wq_thidlelist, uth, uu_workq_entry);
++			wq->wq_thidlecount--;
++			printf("crossxnu: wq deliver: pid=%d tid=%llu popped from "
++			    "idlelist (idle=%u)\n", proc_getpid(p),
++			    (unsigned long long)thread_tid(get_machthread(uth)),
++			    wq->wq_thidlecount);
++			break;
++		}
++	}
++	TAILQ_FOREACH(it, &wq->wq_thnewlist, uu_workq_entry) {
++		if (it == uth) {
++			TAILQ_REMOVE(&wq->wq_thnewlist, uth, uu_workq_entry);
++			wq->wq_thidlecount--;
++			printf("crossxnu: wq deliver: pid=%d tid=%llu popped from "
++			    "newlist (idle=%u)\n", proc_getpid(p),
++			    (unsigned long long)thread_tid(get_machthread(uth)),
++			    wq->wq_thidlecount);
++			break;
++		}
++	}
++	workq_unlock(wq);
++}
 diff --git a/bsd/pthread/workqueue_internal.h b/bsd/pthread/workqueue_internal.h
-index 5cb5dc6..59d5bbb 100644
+index 5cb5dc6..214de42 100644
 --- a/bsd/pthread/workqueue_internal.h
 +++ b/bsd/pthread/workqueue_internal.h
-@@ -306,6 +306,15 @@ void workq_thread_set_max_qos(struct proc *p, struct workq_threadreq_s *kqr);
+@@ -306,6 +306,16 @@ void workq_thread_set_max_qos(struct proc *p, struct workq_threadreq_s *kqr);
  
  void workq_thread_terminate(struct proc *p, struct uthread *uth);
  
@@ -1116,6 +1309,7 @@ index 5cb5dc6..59d5bbb 100644
 + */
 +void crossxnu_workq_dump(struct proc *p, struct uthread *uth, const char *where);
 +void crossxnu_watchdog_arm(void);
++void crossxnu_workq_thread_will_run(struct proc *p, struct uthread *uth);
 +
  __options_decl(workq_kern_threadreq_flags_t, uint32_t, {
  	WORKQ_THREADREQ_NONE                = 0x00,

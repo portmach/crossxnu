@@ -348,3 +348,110 @@ crossxnu: wq death: pid=1 tid=185 state=0x4 list=idlelist ...
 (`workq_setup_thread`/`workq_handle_stack_events`), не должен оставаться в
 `wq_thidlelist`; его нужно вынимать оттуда (аналог `workq_pop_idle_thread`)
 при арминге событий, иначе death-таймер имеет право его «собрать».
+
+### Планировщик здоров, «зависание» — это простой launchd (2026-10-31)
+
+В дерево добавлена диагностика планировщика: кольцевой буфер последних
+решений (патч `0028`, `osfmk/kern/sched_prim.c`), который пишется в
+`thread_setrun`/`processor_setrun`/`thread_select`/`thread_invoke`/
+`processor_idle`/`thread_dispatch`, а разбирается сторожевым таймером
+(`crossxnu_sched_dump`) — только слова в горячем пути, никакого `printf`.
+
+Что показал один прогон (`build/serial-mon1.log`, 200 с, монитор QEMU
+подключён):
+
+```
+crossxnu: sched ring (watchdog), цикл в простое:
+  psetrun  tid=103 a=95 b=0 c=5 d=1024   # pri 95, preempt=AST_PREEMPT|URGENT,
+                                         # state=IDLE(4), action=eExitIdle(0)
+  setrun   tid=103 a=95 b=5 c=1 d=4      # очередь стала 1
+  idlebrk  tid=8   a=1  b=0 c=5          # idle-петля вышла, runq=1
+  select   tid=102 a=0  b=0 c=1 d=5      # выбирает idle-поток
+  selout   tid=103                          # выбрал 103
+  invoke   tid=102 a=103                    # переключение idle -> 103
+  select   tid=103 a=0 b=95 c=0 d=6         # 103 сразу блокируется
+  invoke   tid=103 a=102                    # обратно в idle
+```
+
+То есть цикл «проснулись → отработали → заблокировались → ушли в idle»
+повторяется штатно, очередь пустеет, `processor->state` меняется
+`IDLE(4) → DISPATCHING(5) → RUNNING(6)`. Никаких «осиротевших» потоков в
+`TH_RUN` вне очереди в этом прогоне нет.
+
+Прежнее чтение `runq=0` как «счётчик пуст» было **неверным**: планировщик в
+этой сборке — `sched_dualq` (символ `sched_dualq_choose_thread`), у него
+главная очередь — это `pset->pset_runq`, а `processor->runq` — только очередь
+bound-потоков; `thread->__runq.runq` хранит указатель на *процессор*, а не
+счётчик. Улик «поток в очереди, а очередь пуста» не существует.
+
+Монитор QEMU в момент простоя (`info registers`):
+
+```
+RIP=ffffff8000441137  _machine_idle+0x1c7
+RFL=00000297 [--S-APC] CPL=0 II=0 HLT=1     # IF=1 (0x200), CPU в hlt
+LAPIC: ISR/IRR пусты, TPR/PPR=0
+```
+
+`pal_hlt()` — это `sti; hlt`, то есть процессор спит с **включёнными**
+прерываниями и просыпается на каждый таймер: сторожевой таймер (15 с)
+продолжал печатать дампы вплоть до конца прогона. Значит это не «мертвый»
+процессор и не потерянное прерывание, а настоящее состояние простоя.
+
+Состояние launchd в этот момент (`crossxnu: threads(watchdog)`, все потоки
+`TH_WAIT`):
+
+```
+tid=184 cont=filt_wlwait_continue   # ожидание workloop (kevent_id, filt_wlwait)
+tid=185 cont=workq_unpark_continue  # workqueue-поток припаркован
+tid=186 cont=workq_unpark_continue  # workqueue-поток припаркован
+tid=188 cont=_sleep_continue        # msleep
+```
+
+Последний системный вызов pid 1 — `workq_kernreturn` (368), т.е. парковка
+workqueue-потока. Главная очередь libdispatch прочитана из ядра и разобрана
+по фактической раскладке `struct dispatch_queue_static_s` (сверено с
+`upstream/libdispatch/src/queue_internal.h` и с `llvm-nm` по
+`build/dis/libdispatch.dylib`; `__dispatch_main_q` = vmaddr `0x5fe40`,
+`__dispatch_mgr_q` = `0x5fec0`):
+
+```
++0x00 isa        _OBJC_CLASS_$_OS_dispatch_queue_main
++0x18 do_targetq -> 0x60440 (статическая root-очередь)
++0x30 dq_items_tail = 0
++0x38 dq_state      = 0x001ffe1000000000   # drain owner = 0 (не захвачен),
+                                           # DIRTY (бит 39) = 0
++0x40 dq_serialnum  = 1
++0x48 dq_label      -> "com.apple.main-thread"
++0x78 dq_items_head = 0
+```
+
+То есть главная очередь **пуста и не захвачена** никаким drainer'ом: работы
+в libdispatch нет.
+
+Наконец, полный список boot-task'ов из лога заканчивается так:
+
+```
+(dirs_cleaner) <Notice>: Doing boot task
+(dirs_cleaner-usr) <Notice>: Skipping boot-task
+<Notice>: launchd logging initialized. name: com.apple.xpc.launchd pid: 1
+```
+
+`dirs_cleaner-usr` пропускается штатно (предикат `0x100046d93` в
+`launchd.real` сверяет флаги `PerformAlways`/`PerformAfterUserspaceReboot`/
+`PerformInRestore` в boot-task словаре). После этого launchd **закончил
+список boot-task'ов** и ушёл в простой: новых процессов не появляется,
+системных вызовов нет, главная очередь пуста.
+
+**Вывод.** Наблюдаемая «остановка после `logging initialized`» — не дефект
+планировщика, не потерянное прерывание и не залипший drain главной очереди:
+ядро отдаёт простой корректно, а launchd нечего делать. Дальнейшее
+продвижение требует не правок ядра, а конфигурации userland: в ramdisk нет
+описания задач/сервисов, которые launchd должен запускать (`launchd.plist`
+в образе — системный plist, а не словарь задач), поэтому после boot-task'ов
+запускать нечего.
+
+Следующий шаг (userland, не ядро): положить в образ корректный
+`/System/Library/xpc/launchd.plist` (словарь boot-task'ов и/или задания),
+либо отдельный job (`com.apple.DarwinBootstrapper`/тестовая программа),
+и убедиться, что launchd его порождает; это же даст проверку `posix_spawn`
+и `execve` «в бою».
