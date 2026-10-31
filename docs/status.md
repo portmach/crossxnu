@@ -455,3 +455,29 @@ workqueue-потока. Главная очередь libdispatch прочита
 либо отдельный job (`com.apple.DarwinBootstrapper`/тестовая программа),
 и убедиться, что launchd его порождает; это же даст проверку `posix_spawn`
 и `execve` «в бою».
+
+Что уже видно про задания (проверено по содержимому образа):
+
+* `/System/Library/LaunchDaemons` — 6 recovery-заданий (`syslogd`,
+  `ReportCrash.Root`, `diskimagesiod`, `ramrod`, ...);
+* `/Library/LaunchDaemons/com.crossxnu.hello.plist` — тестовое задание
+  (`/bin/sh -c echo ...`, `RunAtLoad`, вывод в `/dev/console`);
+* ни одно из них launchd не запустил и даже не открыл каталог
+  `/System/Library/LaunchDaemons` (в трассировке путей pid 1 он не
+  встречается, кроме чтения `jetsamproperties.*.plist`);
+* `/System/Library/xpc/launchd.plist` в образе — это системный plist macOS 26
+  (`LaunchDaemons`/`Symlinks`/`SystemLibraryTreeState`), а не словарь
+  boot-task'ов, поэтому он задания не описывает.
+
+Кроме того, баннер в логе показывает, что `/sbin/launchd.real` из этого
+ramdisk — это именно «Darwin Bootstrapper ... root:libxpc_executables-.../
+launchd/RELEASE_X86_64», то есть загрузчик инсталлятора, а не системный
+launchd с полным набором доменов. Поэтому ожидать от него загрузки
+`/Library/LaunchDaemons` нельзя: следующий шаг — либо дать ему тот конфиг,
+который он ищет (boot-task'и/задания recovery-режима), либо перейти на
+полноценный системный launchd с настоящим userland-деревом.
+
+Экспериментальная правка «никогда не собирать idle-потоки workqueue»
+(`workq_death_call_schedule()`) откачена: она больше не нужна, поведение
+вернулось к стоковому (перепроверено загрузкой — финальное состояние то же
+самое, `hlt` в `machine_idle`, boot-task'и завершены).

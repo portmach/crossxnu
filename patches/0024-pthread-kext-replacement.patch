@@ -992,7 +992,7 @@ index 49fb60b..80dddbc 100644
  /*
   * pthread_kext_register is called by pthread.kext upon load, it has to provide
 diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
-index cb27db6..265fcb4 100644
+index cb27db6..0dfb9fe 100644
 --- a/bsd/pthread/pthread_workqueue.c
 +++ b/bsd/pthread/pthread_workqueue.c
 @@ -226,8 +226,23 @@ wq_limit_cooperative_threads_for_proc SYSCTL_HANDLER_ARGS
@@ -1019,16 +1019,7 @@ index cb27db6..265fcb4 100644
  	}
  
  out:
-@@ -892,6 +907,8 @@ workq_should_kill_idle_thread(struct workqueue *wq, struct uthread *uth,
- static void
- workq_death_call_schedule(struct workqueue *wq, uint64_t deadline)
- {
-+	/* crossxnu: experiment: never reap idle threads */
-+	return;
- 	uint32_t wq_flags = os_atomic_load(&wq->wq_flags, relaxed);
- 
- 	if (wq_flags & (WQ_EXITING | WQ_DEATH_CALL_SCHEDULED)) {
-@@ -939,6 +956,18 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+@@ -939,6 +954,18 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
  	uint64_t delay = workq_kill_delay_for_idle_thread(wq);
  
  	if (now - uth->uu_save.uus_workq_park_data.idle_stamp > delay) {
@@ -1047,7 +1038,7 @@ index cb27db6..265fcb4 100644
  		WQ_TRACE_WQ(TRACE_wq_thread_terminate | DBG_FUNC_START,
  		    wq, wq->wq_thidlecount, 0, 0);
  		wq->wq_thdying_count++;
-@@ -953,6 +982,129 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
+@@ -953,6 +980,129 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
  	    uth->uu_save.uus_workq_park_data.idle_stamp + delay);
  }
  
@@ -1177,7 +1168,7 @@ index cb27db6..265fcb4 100644
  void
  workq_thread_terminate(struct proc *p, struct uthread *uth)
  {
-@@ -1170,6 +1322,50 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
+@@ -1170,6 +1320,50 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
  	thread_qos_t qos = workq_pri_override(uth->uu_workq_pri);
  	bool first_use = uth->uu_workq_flags & UT_WORKQ_NEW;
  
@@ -1228,7 +1219,7 @@ index cb27db6..265fcb4 100644
  	if (qos > WORKQ_THREAD_QOS_CLEANUP) {
  		workq_thread_reset_pri(wq, uth, NULL, /*unpark*/ true);
  		qos = WORKQ_THREAD_QOS_CLEANUP;
-@@ -1203,6 +1399,8 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
+@@ -1203,6 +1397,8 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
  		flags |= WQ_FLAG_THREAD_REUSE;
  	}
  
@@ -1237,7 +1228,7 @@ index cb27db6..265fcb4 100644
  	pthread_functions->workq_setup_thread(p, th, vmap, uth->uu_workq_stackaddr,
  	    uth->uu_workq_thport, 0, WQ_SETUP_EXIT_THREAD, flags);
  	__builtin_unreachable();
-@@ -5331,3 +5529,55 @@ workq_init(void)
+@@ -5331,3 +5527,55 @@ workq_init(void)
  	thread_deallocate_daemon_register_queue(&workq_deallocate_queue,
  	    workq_deallocate_queue_invoke);
  }
