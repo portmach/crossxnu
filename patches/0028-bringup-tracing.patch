@@ -313,10 +313,10 @@ index a352414..01b0da3 100644
  skip_syscall:
  #endif /* CONFIG_MACF */
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
-index 949728f..5beabb2 100644
+index 949728f..5fc0732 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1065,6 +1065,38 @@ bsd_init(void)
+@@ -1065,6 +1065,34 @@ bsd_init(void)
  	}
  #endif
  
@@ -335,12 +335,8 @@ index 949728f..5beabb2 100644
 +		extern kern_return_t OSKextLoadKextWithIdentifier(const char *bundle_id);
 +		kern_return_t crossxnu_kr;
 +
-+		crossxnu_kr = OSKextLoadKextWithIdentifier("com.crossxnu.hello");
-+		bsd_init_kprintf("crossxnu: OSKextLoadKextWithIdentifier("
-+		    "com.crossxnu.hello) -> %d\n", crossxnu_kr);
-+
 +		/*
-+		 * The real target: Apple's APFS, taken from the KDK (a normal
++		 * The target: Apple's APFS, taken from the KDK (a normal
 +		 * unprelinked kext) and prelinked into our collection together
 +		 * with the small set of kexts it imports from
 +		 * (IOStorageFamily, CoreAnalyticsFamily, AppleEffaceableStorage,
@@ -399,16 +395,20 @@ index 186c3a9..91e3a8a 100644
  			ref->info->reference_count++;
  
 diff --git a/osfmk/device/subrs.c b/osfmk/device/subrs.c
-index d858958..73e90fe 100644
+index d858958..20f400e 100644
 --- a/osfmk/device/subrs.c
 +++ b/osfmk/device/subrs.c
-@@ -296,6 +296,11 @@ strlen_impl(const char *string)
+@@ -296,6 +296,15 @@ strlen_impl(const char *string)
  size_t
  strnlen_impl(const char *s, size_t max)
  {
++	/*
++	 * crossxnu: a NULL string used to be a page fault here.  One of the KDK
++	 * kexts (AppleImage4) calls strnlen() with a NULL pointer during start;
++	 * treat it as an empty string so the boot can continue.  Remove this once
++	 * the kext-side NULL is tracked down.
++	 */
 +	if (s == NULL) {
-+		printf("crossxnu: strnlen(NULL, 0x%zx) from %p\n",
-+		    max, __builtin_return_address(0));
 +		return 0;
 +	}
  	const char *es = s + max, *p = s;
