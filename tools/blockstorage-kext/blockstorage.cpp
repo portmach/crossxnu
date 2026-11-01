@@ -136,6 +136,7 @@ pciConfigWrite(UInt8 bus, UInt8 slot, UInt8 func, UInt8 offset, UInt32 value)
 #define ATA_CMD_IDENTIFY      0xEC
 #define ATA_CMD_READ_DMA_EXT  0x25
 #define ATA_CMD_WRITE_DMA_EXT 0x35
+#define ATA_CMD_FLUSH_CACHE_EXT 0xEA
 
 struct crossxnu_ahci
 {
@@ -218,6 +219,9 @@ public:
 	virtual IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block,
 	                                  UInt64 nblks, IOStorageAttributes *attributes,
 	                                  IOStorageCompletion *completion) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn doSynchronizeCache(void) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn doSynchronize(UInt64 block, UInt64 nblks,
+	                               IOStorageSynchronizeOptions options = 0) APPLE_KEXT_OVERRIDE;
 };
 
 OSDefineMetaClassAndStructors(com_crossxnu_BlockStorage, IOBlockStorageDevice);
@@ -987,6 +991,23 @@ IOReturn com_crossxnu_BlockStorage::doAsyncReadWrite(IOMemoryDescriptor *buffer,
 	IOStorage::complete(completion, status, done);
 
 	return status;
+}
+
+IOReturn com_crossxnu_BlockStorage::doSynchronizeCache(void)
+{
+	if (_backend == kBackendAHCI) {
+		return ahciCommand(ATA_CMD_FLUSH_CACHE_EXT, 0, 0, 0, 0, false);
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn com_crossxnu_BlockStorage::doSynchronize(UInt64 block, UInt64 nblks,
+                                                IOStorageSynchronizeOptions options)
+{
+	(void)block;
+	(void)nblks;
+	(void)options;
+	return doSynchronizeCache();
 }
 
 /*

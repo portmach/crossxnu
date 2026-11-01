@@ -59,9 +59,13 @@ syscall3(long number, long a, long b, long c)
 	long ret;
 	unsigned char failed;
 
+	/* In Darwin x86_64 unix_syscall64, the kernel returns uu_rval[0] in %rax
+	 * and uu_rval[1] in %rdx (zeroed for 1-value returns).  %rdx must be
+	 * marked as modified (+d) so the compiler does not cache values across
+	 * syscalls (which caused w != r to compare against a zeroed %rdx). */
 	__asm__ volatile ("syscall\n\tsetc %1"
-	: "=a" (ret), "=qm" (failed)
-	: "a" (number), "D" (a), "S" (b), "d" (c)
+	: "=a" (ret), "=qm" (failed), "+d" (c)
+	: "a" (number), "D" (a), "S" (b)
 	: "rcx", "r11", "memory");
 	return failed ? -ret : ret;
 }
@@ -77,8 +81,8 @@ syscall4(long number, long a, long b, long c, long d)
 	 * %rcx and %r11); pinning it with a register variable keeps the operand
 	 * numbering out of the picture. */
 	__asm__ volatile ("syscall\n\tsetc %1"
-	: "=a" (ret), "=qm" (failed)
-	: "a" (number), "D" (a), "S" (b), "d" (c), "r" (arg4)
+	: "=a" (ret), "=qm" (failed), "+d" (c)
+	: "a" (number), "D" (a), "S" (b), "r" (arg4)
 	: "rcx", "r11", "memory");
 	return failed ? -ret : ret;
 }
@@ -346,8 +350,13 @@ report_fail(const char *side, const char *path, long err, long *shown)
 	lb_puts(&l, side);
 	lb_puts(&l, "=");
 	lb_puts(&l, path);
-	lb_puts(&l, " errno ");
-	lb_dec(&l, (unsigned long)(err < 0 ? -err : err));
+	lb_puts(&l, " ret=");
+	if (err < 0) {
+		lb_puts(&l, "-");
+		lb_dec(&l, (unsigned long)(-err));
+	} else {
+		lb_dec(&l, (unsigned long)err);
+	}
 	lb_puts(&l, "\n");
 	lb_flush(&l, 1);
 }
@@ -390,6 +399,17 @@ probe_target(const char *dest)
 	lb_puts(&l, "\n");
 	lb_flush(&l, 1);
 	if (fd >= 0) {
+		long w = sys_write((int)fd, "hello\n", 6);
+		lb_init(&l);
+		lb_puts(&l, "apfsroot: probe write -> ");
+		if (w < 0) {
+			lb_puts(&l, "-");
+			lb_dec(&l, (unsigned long)(-w));
+		} else {
+			lb_dec(&l, (unsigned long)w);
+		}
+		lb_puts(&l, "\n");
+		lb_flush(&l, 1);
 		sys_close((int)fd);
 	}
 
@@ -527,11 +547,17 @@ populate(const char *manifest_path, const char *dest)
 									    &shown);
 									break;
 								}
-								w = sys_write((int)dfd, copybuf, r);
-								if (w != r) {
-									failed++;
-									report_fail("write", dst,
-									    w < 0 ? w : -5, &shown);
+								long off = 0;
+								while (off < r) {
+									w = sys_write((int)dfd, copybuf + off, r - off);
+									if (w <= 0) {
+										failed++;
+										report_fail("write", dst, w, &shown);
+										break;
+									}
+									off += w;
+								}
+								if (off < r) {
 									break;
 								}
 								bytes += (unsigned long)r;

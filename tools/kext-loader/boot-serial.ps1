@@ -50,11 +50,28 @@ $qemuArgs = @(
     "-no-reboot"
 )
 
-$qemuArgs += $ExtraArgs
+$parsedExtraArgs = @()
+foreach ($a in $ExtraArgs) {
+    $clean = $a -replace "['\""]", ""
+    if ($clean -match "^(-[a-zA-Z0-9_-]+),(.*)$") {
+        $parsedExtraArgs += $Matches[1]
+        $parsedExtraArgs += $Matches[2]
+    } else {
+        $parsedExtraArgs += $clean
+    }
+}
+$qemuArgs += $parsedExtraArgs
 $argString = ($qemuArgs | ForEach-Object { if ($_ -match "\s") { "`"$_`"" } else { $_ } }) -join " "
 Write-Host "booting ESP for $Seconds s, serial -> $logPath"
-$p = Start-Process -FilePath $Qemu -ArgumentList $argString -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds $Seconds
+$stderrPath = Join-Path $Repo "build\qemu-stderr.log"
+$p = Start-Process -FilePath $Qemu -ArgumentList $argString -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 2
+if ($p.HasExited) {
+    Write-Host "QEMU exited prematurely with code $($p.ExitCode):"
+    if (Test-Path $stderrPath) { Get-Content $stderrPath | Write-Host }
+    exit 1
+}
+Start-Sleep -Seconds ($Seconds - 2)
 if (-not $p.HasExited) {
     $p.Kill()
     Start-Sleep -Milliseconds 500
