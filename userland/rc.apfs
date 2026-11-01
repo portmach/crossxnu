@@ -1,0 +1,16 @@
+#!/bin/sh
+# crossxnu: boot from the APFS volume when one is attached.
+#
+# The kernel mounts the APFS container read-only at /mnt1 (bsd_init.c,
+# docs/status.md 12): APFS refuses a read-write container/root mount, so the
+# volume itself has to be mounted again from userland, by device node.
+#
+# apfsroot must keep pid 1: APFS only allows a "root" mount from initproc
+# ("apfs_vfsop_mount: not allowed to mount as root" otherwise), and mount(2)
+# from a child process is refused with EPERM.  So this script execs it, and
+# apfsroot itself execs /etc/rc.launchd when the APFS root cannot be prepared,
+# which keeps the old HFS+ path working.
+
+echo "crossxnu: checking for an APFS root"
+
+exec /sbin/apfsroot boot /etc/apfs.manifest

@@ -650,6 +650,9 @@ com_crossxnu_BlockStorage::ahciReadWrite(IOMemoryDescriptor *buffer,
 			moved = buffer->readBytes((IOByteCount)offset, a->bounce,
 			    chunk);
 			if (moved != chunk) {
+				IOLog("CrossXnuBlockStorage: write %llu+%u: source "
+				    "read %u bytes\n", (unsigned long long)lba, chunk,
+				    (unsigned)moved);
 				return kIOReturnUnderrun;
 			}
 		}
@@ -658,6 +661,9 @@ com_crossxnu_BlockStorage::ahciReadWrite(IOMemoryDescriptor *buffer,
 		    : ATA_CMD_READ_DMA_EXT, lba, count, a->bouncePhys, chunk,
 		    write);
 		if (status != kIOReturnSuccess) {
+			IOLog("CrossXnuBlockStorage: %s lba %llu count %u failed "
+			    "(%08x)\n", write ? "write" : "read",
+			    (unsigned long long)lba, count, status);
 			return status;
 		}
 

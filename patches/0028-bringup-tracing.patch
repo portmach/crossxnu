@@ -380,7 +380,7 @@ index 949728f..74a44e9 100644
 +{
 +	static const char *const candidates[] = {
 +		"/dev/disk0s1", "/dev/disk0s2", "/dev/disk0s3",
-+		"/dev/disk0", NULL
++		"/dev/disk1s1", NULL
 +	};
 +	static const char *const mountpoints[] = { "/mnt1", "/Volumes", NULL };
 +
@@ -414,14 +414,14 @@ index 949728f..74a44e9 100644
 +
 +				merr = kernel_mount("apfs", NULLVP, NULLVP,
 +				    mountpoints[m], devpathpp, 0,
-+				    (MNT_RDONLY | MNT_DONTBROWSE),
++				    MNT_DONTBROWSE,
 +				    (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT),
 +				    vfs_context_kernel());
 +				if (merr != 0) {
-+					/* Retry read-write if read-only failed */
++					/* Retry read-only: a container/root mount only takes MNT_RDONLY */
 +					merr = kernel_mount("apfs", NULLVP, NULLVP,
 +					    mountpoints[m], devpathpp, 0,
-+					    MNT_DONTBROWSE,
++					    (MNT_RDONLY | MNT_DONTBROWSE),
 +					    (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT),
 +					    vfs_context_kernel());
 +				}

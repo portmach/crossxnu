@@ -59,15 +59,18 @@ sys_exit(int code)
 static const char console_path[] = "/dev/console";
 static const char shell_path[] = "/bin/sh";
 /*
- * Two boot scripts: /etc/rc.local drops to an interactive shell (bring-up),
- * /etc/rc.launchd prepares /private/var and execs the real launchd as pid 1.
- * The stub picks the launchd one when it is present, so the ramdisk decides.
+ * Three boot scripts: /etc/rc.apfs boots from the APFS volume when the kernel
+ * has one mounted, /etc/rc.launchd prepares /private/var and execs the real
+ * launchd on the HFS+ root, /etc/rc.local drops to an interactive shell
+ * (bring-up).  The stub picks the first one present, so the ramdisk decides.
  */
+static const char rc_apfs_path[] = "/etc/rc.apfs";
 static const char rc_interactive_path[] = "/etc/rc.local";
 static const char rc_launchd_path[] = "/etc/rc.launchd";
 static const char fail_msg[] = "crossxnu-init: cannot exec /bin/sh /etc/rc.local\n";
 
 static const char *const shell_argv[] = { shell_path, rc_interactive_path, 0 };
+static const char *const shell_argv_apfs[] = { shell_path, rc_apfs_path, 0 };
 static const char *const shell_argv_launchd[] = { shell_path, rc_launchd_path, 0 };
 static const char *const shell_envp[] = {
 	"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
@@ -91,8 +94,10 @@ start(void)
 
 	long error;
 
-	/* Prefer the launchd path when the ramdisk ships that script. */
-	if (sys_open(rc_launchd_path, 0 /* O_RDONLY */, 0) >= 0) {
+	/* The ramdisk decides how far up we go: APFS root, launchd, or a shell. */
+	if (sys_open(rc_apfs_path, 0 /* O_RDONLY */, 0) >= 0) {
+		error = sys_execve(shell_path, shell_argv_apfs, shell_envp);
+	} else if (sys_open(rc_launchd_path, 0 /* O_RDONLY */, 0) >= 0) {
 		error = sys_execve(shell_path, shell_argv_launchd, shell_envp);
 	} else {
 		error = sys_execve(shell_path, shell_argv, shell_envp);
