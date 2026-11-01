@@ -1,16 +1,41 @@
 #!/bin/sh
 # crossxnu: boot from the APFS volume when one is attached.
 #
-# The kernel mounts the APFS container read-only at /mnt1 (bsd_init.c,
-# docs/status.md 12): APFS refuses a read-write container/root mount, so the
-# volume itself has to be mounted again from userland, by device node.
+# The kernel mounts the APFS volume read-write at /mnt1 (bsd_init.c tries the
+# volume node /dev/disk1s1 first).  If that worked, apfsroot copies the root
+# tree into it on the first boot and chroots into it, so launchd is started
+# from APFS instead of the HFS+ image.
+#
+# If /mnt1 is not APFS, the disk is blank or holds something else: format it
+# with Apple's own newfs_apfs, which lives in the filesystem bundle (the /sbin
+# stubs in this tree are zero bytes).  Containers made by Linux mkapfs mount but
+# refuse data writes with EIO, so Apple's formatter is the only usable one.
+# After formatting we fall back to the HFS+ root for this boot; the next boot
+# finds a real APFS volume.
 #
 # apfsroot must keep pid 1: APFS only allows a "root" mount from initproc
-# ("apfs_vfsop_mount: not allowed to mount as root" otherwise), and mount(2)
-# from a child process is refused with EPERM.  So this script execs it, and
-# apfsroot itself execs /etc/rc.launchd when the APFS root cannot be prepared,
-# which keeps the old HFS+ path working.
+# ("apfs_vfsop_mount: not allowed to mount as root" otherwise).  So this script
+# execs it, and apfsroot itself execs /etc/rc.launchd when the APFS root cannot
+# be prepared, which keeps the old HFS+ path working.
+
+NEWFS=/System/Library/Filesystems/apfs.fs/Contents/Resources/newfs_apfs
 
 echo "crossxnu: checking for an APFS root"
 
-exec /sbin/apfsroot boot /etc/apfs.manifest
+if /sbin/apfsroot ready; then
+	exec /sbin/apfsroot boot /etc/apfs.manifest
+fi
+
+echo "crossxnu: /mnt1 is not APFS; looking at the disk"
+
+if [ -x "$NEWFS" ] && [ -e /dev/disk0 ]; then
+	/sbin/apfsroot unmount /mnt1
+	echo "crossxnu: formatting /dev/disk0 with newfs_apfs"
+	"$NEWFS" -v crossxnu /dev/disk0
+	echo "crossxnu: newfs_apfs -> $?"
+else
+	echo "crossxnu: no newfs_apfs or no /dev/disk0"
+fi
+
+echo "crossxnu: falling back to the HFS+ root for this boot"
+exec /bin/sh /etc/rc.launchd

@@ -921,6 +921,18 @@ apfsroot_main(long argc, char **argv)
 		status = apfs_ready() ? 0 : 1;
 	} else if (argc >= 4 && str_eq(argv[1], "populate")) {
 		status = populate(argv[2], argv[3]) == 0 ? 0 : 1;
+	} else if (argc >= 3 && str_eq(argv[1], "unmount")) {
+		long r = sys_unmount(argv[2], 0);
+		struct lbuf l;
+
+		lb_init(&l);
+		lb_puts(&l, "apfsroot: unmount ");
+		lb_puts(&l, argv[2]);
+		lb_puts(&l, " -> ");
+		lb_dec(&l, (unsigned long)(r < 0 ? -r : 0));
+		lb_puts(&l, "\n");
+		lb_flush(&l, 1);
+		status = (r == 0) ? 0 : 1;
 	} else if (argc >= 3 && str_eq(argv[1], "boot")) {
 		status = do_boot(argv[2]);
 		if (status != 0) {

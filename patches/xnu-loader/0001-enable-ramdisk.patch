@@ -1,0 +1,74 @@
+diff --git a/src/devtree.c b/src/devtree.c
+index b6dd77a..3214f9b 100644
+--- a/src/devtree.c
++++ b/src/devtree.c
+@@ -1116,18 +1116,18 @@ EFI_STATUS dt_build(
+   }
+ #endif
+ 
+-  //if (ctx->ramdisk_size != 0) {
+-  //  if (memory_map == NULL) {
+-  //    memory_map = dt_create_node(ctx);
+-  //    dt_prop_str(ctx, memory_map, "name", "memory-map");
+-  //  }
+-  //  MemoryMapFileInfo ramdisk_info;
+-  //  ramdisk_info.paddr = (UINT64)ctx->ramdisk_phys;
+-  //  ramdisk_info.length = ctx->ramdisk_size;
+-  //  dt_prop(ctx, memory_map, "RAMDisk", &ramdisk_info, sizeof(ramdisk_info));
+-  //  log_info(L"DT: RAMDisk at 0x%lx size=0x%lx\r\n",
+-  //           (UINT64)ctx->ramdisk_phys, ctx->ramdisk_size);
+-  //}
++  if (ctx->ramdisk_size != 0) {
++    if (memory_map == NULL) {
++      memory_map = dt_create_node(ctx);
++      dt_prop_str(ctx, memory_map, "name", "memory-map");
++    }
++    MemoryMapFileInfo ramdisk_info;
++    ramdisk_info.paddr = (UINT64)ctx->ramdisk_phys;
++    ramdisk_info.length = ctx->ramdisk_size;
++    dt_prop(ctx, memory_map, "RAMDisk", &ramdisk_info, sizeof(ramdisk_info));
++    log_info(L"DT: RAMDisk at 0x%lx size=0x%lx\r\n",
++             (UINT64)ctx->ramdisk_phys, ctx->ramdisk_size);
++  }
+ 
+   if (memory_map != NULL)
+     dt_add_child(ctx, chosen, memory_map);
+diff --git a/src/main.c b/src/main.c
+index 308ef16..c53620a 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -440,9 +440,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+ 
+   log_info(L"entry vm=0x%lx -> host=0x%lx\r\n", entry_vmaddr, (UINT64)(UINTN)host_entry);
+ 
+-  //status = load_ramdisk(&ctx);
+-  //if (EFI_ERROR(status))
+-  //  return status;
++  status = load_ramdisk(&ctx);
++  if (EFI_ERROR(status))
++    log_error(L"load_ramdisk failed: %r\r\n", status);
+ 
+   BootArgsState boot_state = {0};
+ 
+@@ -494,14 +494,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
+     log_info(L"no boot-args.txt found (%r); using default boot args\r\n", args_status);
+   }
+ 
+-  // disabled until things work right
+-  //if (ctx.ramdisk_size != 0) {
+-  //  status = append_ramdisk_boot_arg(&ctx, &cmdline, &cmdline_owned);
+-  //  if (EFI_ERROR(status)) {
+-  //    log_error(L"failed to append rd=md0: %r\r\n", status);
+-  //    return status;
+-  //  }
+-  //}
++  if (ctx.ramdisk_size != 0) {
++    status = append_ramdisk_boot_arg(&ctx, &cmdline, &cmdline_owned);
++    if (EFI_ERROR(status)) {
++      log_error(L"failed to append rd=md0: %r\r\n", status);
++      return status;
++    }
++  }
+ 
+   status = boot_build_args(&ctx, cmdline, &load_result, &boot_state);
+   if (EFI_ERROR(status)) {

@@ -42,9 +42,13 @@
 /* Sector size every ATA disk reports, and the granularity of
  * doAsyncReadWrite() once reportBlockSize() has said so. */
 #define kAHCIBlockSize 512
-/* One command moves at most this much, through a contiguous region whose
- * physical address we know.  APFS metadata I/O is far smaller. */
-#define kAHCIMaxTransfer (256 * 1024)
+/* One command moves at most this much.  AHCI's PRDT has a 64K boundary rule:
+ * a single entry must not describe memory that crosses a 64 KiB boundary, and
+ * a 128 KiB transfer through one entry hangs the emulated controller.  The
+ * bounce buffer is allocated 64 KiB aligned and transfers never exceed 64 KiB,
+ * so the rule cannot be broken. */
+#define kAHCIMaxTransfer (64 * 1024)
+#define kAHCIBounceAlign (64 * 1024)
 
 /* Kernel-side helper (bsd/kern/bsd_init.c) that mounts the volume once its
  * /dev node exists: mounting needs kernel_mount() and VFS internals, which a
@@ -173,6 +177,8 @@ private:
 	IOWorkLoop *         _workLoop;
 	IOTimerEventSource * _timer;
 	int                  _waits;
+	bool                 _loggedRead;
+	bool                 _loggedWrite;
 
 	static void publishTimer(OSObject *owner, IOTimerEventSource *sender);
 
@@ -229,6 +235,8 @@ bool com_crossxnu_BlockStorage::init(OSDictionary *properties)
 	_workLoop   = NULL;
 	_timer      = NULL;
 	_waits      = 0;
+	_loggedRead = false;
+	_loggedWrite = false;
 
 	memset(&_ahci, 0, sizeof(_ahci));
 
@@ -312,16 +320,23 @@ com_crossxnu_BlockStorage::ahciCommand(UInt8 command, UInt64 lba, UInt16 count,
 	ahciSetReg(a, base + AP_IS, 0xFFFFFFFF);
 	ahciSetReg(a, base + AP_CI, 1);
 
-	for (spin = 0; spin < 500000; spin++) {
+	for (spin = 0; spin < 3000000; spin++) {
 		if ((ahciReg(a, base + AP_CI) & 1) == 0) {
 			break;
 		}
 		IODelay(10);
 	}
-	if (spin == 500000) {
+	if (spin == 3000000) {
 		IOLog("CrossXnuBlockStorage: port %d command %02x timed out\n",
 		    a->port, command);
+		/* Leave the port usable: drop the command and restart the engine. */
 		ahciSetReg(a, base + AP_CI, 0);
+		ahciSetReg(a, base + AP_CMD,
+		    ahciReg(a, base + AP_CMD) & ~AP_CMD_ST);
+		IODelay(1000);
+		ahciSetReg(a, base + AP_CMD,
+		    ahciReg(a, base + AP_CMD) | AP_CMD_ST);
+		IODelay(1000);
 		return kIOReturnTimeout;
 	}
 
@@ -520,7 +535,7 @@ com_crossxnu_BlockStorage::initAHCI(void)
 	 * command is ever in flight. */
 	a->cl = (UInt32 *)IOMallocContiguous(1024, 1024, &a->clPhys);
 	a->ct = (UInt8 *)IOMallocContiguous(4096, 128, &a->ctPhys);
-	a->bounce = (UInt8 *)IOMallocContiguous(kAHCIMaxTransfer, 4096,
+	a->bounce = (UInt8 *)IOMallocContiguous(kAHCIMaxTransfer, kAHCIBounceAlign,
 	    &a->bouncePhys);
 	if (a->cl == NULL || a->ct == NULL || a->bounce == NULL) {
 		IOLog("CrossXnuBlockStorage: no DMA memory\n");
@@ -571,7 +586,10 @@ com_crossxnu_BlockStorage::initAHCI(void)
 			apfsPort = port;
 			apfsSectors = a->sectors;
 		}
-		if (a->sectors > largestSectors) {
+		/* Port 0 is where QEMU puts the ESP, which is much larger than the
+		 * test images; never fall back to it, or a format command aimed at
+		 * "the disk" would erase the boot partition. */
+		if (port != 0 && a->sectors > largestSectors) {
 			largestPort = port;
 			largestSectors = a->sectors;
 		}
@@ -936,8 +954,20 @@ IOReturn com_crossxnu_BlockStorage::doAsyncReadWrite(IOMemoryDescriptor *buffer,
 	}
 
 	if (_backend == kBackendAHCI) {
-		status = ahciReadWrite(buffer, block, nblks,
-		    buffer->getDirection() != kIODirectionIn, &done);
+		bool isWrite = (buffer->getDirection() != kIODirectionIn);
+
+		/* One line per direction on the first transfer: tells apart "APFS
+		 * never issued a write" from "the write failed in the driver". */
+		if (!isWrite && !_loggedRead) {
+			_loggedRead = true;
+			IOLog("CrossXnuBlockStorage: first read lba %llu count %llu\n",
+			    (unsigned long long)block, (unsigned long long)nblks);
+		} else if (isWrite && !_loggedWrite) {
+			_loggedWrite = true;
+			IOLog("CrossXnuBlockStorage: first write lba %llu count %llu\n",
+			    (unsigned long long)block, (unsigned long long)nblks);
+		}
+		status = ahciReadWrite(buffer, block, nblks, isWrite, &done);
 		IOStorage::complete(completion, status, done);
 		return status;
 	}
