@@ -188,3 +188,12 @@ echo 0007-my-change.patch >> patches/series
 
 `0028` — диагностика, а не функциональность: её можно и нужно выкинуть, когда
 ранний userland станет стабильным.
+
+## Загрузчик (`patches/xnu-loader/`)
+
+Не часть серии XNU: патчи здесь применяются к `upstream/xnu-loader` при сборке
+загрузчика (`scripts/build-loader.sh`), сам submodule остаётся на пине.
+
+| Патч | Что делает |
+| --- | --- |
+| `0001-enable-ramdisk.patch` | возвращает загрузку `\ramdisk.img` (`main.c`, вызовы `load_ramdisk`/`append_ramdisk_boot_arg`) и свойство `RAMDisk` в `/chosen/memory-map` (`devtree.c`). В пине это выключено коммитом «temp: Disable ramdisk netboot for now, unreliable on real hardware», а crossxnu грузит корень именно из ramdisk |

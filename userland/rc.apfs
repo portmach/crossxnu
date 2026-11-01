@@ -7,11 +7,11 @@
 # from APFS instead of the HFS+ image.
 #
 # If /mnt1 is not APFS, the disk is blank or holds something else: format it
-# with Apple's own newfs_apfs, which lives in the filesystem bundle (the /sbin
-# stubs in this tree are zero bytes).  Containers made by Linux mkapfs mount but
-# refuse data writes with EIO, so Apple's formatter is the only usable one.
-# After formatting we fall back to the HFS+ root for this boot; the next boot
-# finds a real APFS volume.
+# with Apple's own newfs_apfs (the /sbin entries in this tree are zero bytes;
+# the real tool lives in the filesystem bundle).  Containers made by Linux
+# mkapfs mount but refuse data writes with EIO, so Apple's formatter is the only
+# usable one.  After formatting we fall back to the HFS+ root for this boot; the
+# next boot finds a real APFS volume.
 #
 # apfsroot must keep pid 1: APFS only allows a "root" mount from initproc
 # ("apfs_vfsop_mount: not allowed to mount as root" otherwise).  So this script
@@ -27,6 +27,12 @@ if /sbin/apfsroot ready; then
 fi
 
 echo "crossxnu: /mnt1 is not APFS; looking at the disk"
+echo "crossxnu: dev nodes: /dev/*"
+
+if [ -e /dev/disk0 ]; then
+	echo "crossxnu: raw write test on /dev/disk0"
+	/sbin/apfsroot rawtest /dev/disk0
+fi
 
 if [ -x "$NEWFS" ] && [ -e /dev/disk0 ]; then
 	/sbin/apfsroot unmount /mnt1

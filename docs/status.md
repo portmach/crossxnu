@@ -1675,3 +1675,108 @@ APFS писать. Дальнейшие варианты: заставить `ne
 (`KERNEL_MOUNT_VOLBYROLE` с корректным 324-байтным блоком аргументов), либо
 писать в APFS из ядра через уже смонтированный том, если найти способ снять с
 APFS признак «root mount».
+
+## 15. Сводка: где стоит работа по APFS-корню (2026-11-01)
+
+Этот раздел — точка остановки. Ниже: что сделано и **чем именно проверено**,
+что осталось, где упёрлись и как всё воспроизвести.
+
+### 15.1 Что работает (проверено загрузками)
+
+| Что | Чем проверено |
+| --- | --- |
+| Сборка ядра и KC, серия патчей консистентна | `scripts/build.sh`, `build/check_series.sh` (`0028 ok`) |
+| Загрузчик собирается из исходников, грузит `ramdisk.img`, ядро берёт корень из md0 | `build/serial-smoke.log`: `DT: RAMDisk at …`, `crossxnu: root device md0 (612732928 bytes)` |
+| ESP пересобирается одной командой | `scripts/build-esp.sh` (образ 1200 МБ, loader + kernel.kc + ramdisk.img) |
+| AHCI-диск: чтение и запись | `build/serial-rawtest.log`: `rawtest open -> 0`, `pread -> 512`, `pwrite -> 512`, `verify -> match` |
+| APFS-том монтируется с AHCI-диска | `crossxnu: mount -t apfs /dev/disk1s1 /mnt1 -> 0`, `apfsroot: /mnt1 writable test -> 0` |
+| `apfsroot`: populate по манифесту, devfs внутрь, chroot, exec launchd | реализовано; populate доходит до записи файлов |
+| Транспорт без сегмента `__APFSIMG` (KC 21.6 МБ вместо 30) | `build/serial-ahci5.log` |
+
+### 15.2 Где упёрлись
+
+1. **APFS не принимает данные в том, созданный Linux-`mkapfs`.** Том
+   монтируется (VFS считает его RW, запись в каталог проходит), но первая же
+   запись файла даёт `EIO`; блок-слой запрос при этом видит и выполняет.
+   Роль тома (none/data) не помогает. Вывод: контейнер `mkapfs` для Apple-овского
+   APFS — «читаемый», а не полноценно записываемый.
+2. **Монтирование тома из userland запрещено**: `mount(2)` → `EPERM`,
+   `apfs_vfsop_mount:2611: not allowed to mount as root`. APFS ставит
+   `MNT_ROOTFS` и требует kernel-контекст. Таблица переходов по `mount_mode`
+   расшифрована (0 — root, 4 — conversion, 5–7 — crypto/livefs), перебор 0..8
+   ничего не меняет — значит наш аргумент до APFS доходит как «root mount».
+3. **Apple-овский `newfs_apfs` в госте зависает** (1 ГиБ и 64 МиБ). Настоящий
+   бинарь лежит в `System/Library/Filesystems/apfs.fs/Contents/Resources/`, в
+   `/sbin` — нулевые заглушки. По трассировке syscall'ов он уходит в цикл
+   `pwrite` (syscall 154) и не выходит из него; в образ не пишется ничего.
+4. **`apfs_hfs_convert` недоступен**: в дереве это файл нулевого размера.
+
+### 15.3 Важная методическая находка: QEMU убивается без сброса кэша
+
+`tools/kext-loader/boot-serial.ps1` завершает QEMU через `Kill()`, то есть
+SIGKILL. Диск подключён с write-back кэшем (`-drive file=…,format=raw,if=ide`),
+поэтому всё, что гость записал, остаётся в кэше QEMU и **не доезжает до
+файла**. Именно поэтому `rawtest` читает свой шаблон обратно («match»), а в
+`build/apfs-fmt64.img` его нет.
+
+Правило: любой тест на **сохранность** данных требует
+`-drive file=…,format=raw,if=ide,index=1,cache=writethrough` (или аккуратного
+завершения QEMU). Иначе populate «прошёл», а образа нет.
+
+### 15.4 Что осталось сделать
+
+1. **Заставить APFS писать.** Варианты по убыванию шансов:
+   - разобрать, на каком именно `pwrite`/ioctl застревает `newfs_apfs`
+     (добавить трассировку пути записи в kext: lba/размер/возврат, и сравнить
+     с тем, что делает `rawtest`);
+   - монтировать том **без** `KERNEL_MOUNT_BASESYSTEMROOT`, через
+     `KERNEL_MOUNT_VOLBYROLE` и корректный 324-байтный блок аргументов APFS
+     (структуру надо разобрать по `apfs_vfsop_mount`);
+   - собрать APFS-том на хосте записывающим драйвером (`linux-apfs-rw`):
+     мешает отсутствие полного дерева заголовков WSL-ядра (`make modules` в
+     `/usr/src/linux-headers-…` не работает).
+2. **Наполнить том** — механизм готов: манифест `scripts/gen-apfs-manifest.py`
+   (2158 записей, 1028 файлов, 581 МиБ) + `apfsroot populate`.
+3. **Сделать том корнем** — `apfsroot boot` уже делает `chroot` + devfs + exec
+   launchd; останется только убедиться, что launchd стартует с APFS
+   (`Not booted from APFS` исчезает).
+4. Дальше — роли томов (System/Data/Preboot) и `/private/var` на отдельном
+   томе, как в настоящей macOS.
+
+### 15.5 Как воспроизвести текущее состояние
+
+```bash
+# ядро + kext + коллекция
+./scripts/build.sh --arch x86_64 --config RELEASE --security permissive --jobs 8
+python3 tools/kext-loader/build-blockstorage-kext.py
+tools/kext-loader/build-apfs-image-kc.sh /tmp/kdkroot/System/Library/Extensions none
+
+# загрузчик (патч ramdisk + ELF→PE конвертер) и ESP
+./scripts/build-loader.sh
+./scripts/build-esp.sh
+
+# корневой образ (дерево ~/recovery) и том APFS
+python3 scripts/hfs-image.py ~/recovery ~/rec-new.hfs
+tools/bringup/make-apfs-image.sh 1G build/apfs.img rootrw
+
+# загрузка с диском (для проверки сохранности — cache=writethrough)
+pwsh -File tools/kext-loader/boot-serial.ps1 -Log build/serial.log -Seconds 300 `
+  -ExtraArgs '-drive','file=build/apfs.img,format=raw,if=ide,index=1'
+```
+
+Артефакты: `build/esp32.img` (loader, kernel.kc, ramdisk.img),
+`build/kernel.kc`, `build/blockstorage-kext/`, `build/apfsroot`,
+`~/rec-new.hfs`, `build/apfs*.img`. Карта kext'ов в KC:
+`com.crossxnu.driver.CrossXnuBlockStorage` + Apple APFS и его зависимости.
+
+### 15.6 Грабли, которые уже стоили прогонов
+
+- Порт 0 AHCI — это ESP; kext больше не выбирает его как «запасной диск»
+  (иначе `newfs_apfs` стирает загрузочный раздел — так и случилось однажды).
+- 128 КиБ в одном PRDT-элементе вешают эмулируемый контроллер: передача
+  ограничена 64 КиБ, буфер выровнен на 64 КиБ, таймаут 30 с, порт
+  перезапускается после таймаута.
+- Идентификатор kext'а в `bsd_init.c`: при переименовании пересобирать и ядро,
+  и KC (иначе kext молча не грузится).
+- ELF→PE: нельзя перенумеровывать RVA секций — точка входа `0x4000` уезжает
+  мимо `.text` и прошивка падает в `#UD`.

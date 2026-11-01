@@ -23,44 +23,52 @@ OVMF (edk2-x86_64-code.fd)
 
 ## Сборка загрузчика
 
-Нужен `gnu-efi` (Arch: `gnu-efi`) и CMake.
+Загрузчик лежит в `upstream/xnu-loader` (submodule) и собирается скриптом:
 
 ```bash
-git clone https://github.com/PureDarwin/xnu-loader.git
-cmake -S xnu-loader -B xnu-loader/build \
-    -DGNU_EFI_DIR=/usr -DARCH=x86_64
-cmake --build xnu-loader/build -j"$(nproc)"
+./scripts/build-loader.sh     # патч ramdisk + cmake + ELF->PE
+./scripts/build-esp.sh        # ESP: loader + kernel.kc + ramdisk.img
 ```
 
-Штатное правило `objcopy --target=efi-app-x86_64` в GNU binutils без
-`--enable-targets` не работает. Рабочий вариант:
+Что важно знать (подробности — `status.md` §14):
 
-```bash
-objcopy -I elf64-x86-64 \
-    -j .text -j .sdata -j .data -j .rodata \
-    -j .dynamic -j .dynsym -j .rel -j .rela -j .reloc \
-    -O pei-x86-64 --subsystem=efi-app \
-    xnu-loader/build/xnu-loader.so BOOTX64.EFI
-```
+- В пине submodule загрузка `\ramdisk.img` выключена («temp: Disable ramdisk
+  netboot»), а crossxnu грузит с него корень. `patches/xnu-loader/0001-…`
+  возвращает обе половины: чтение файла в `main.c` и свойство `RAMDisk` в
+  `/chosen/memory-map` в `devtree.c`.
+- Штатное правило `objcopy --target=efi-app-x86_64` здесь не работает:
+  binutils и llvm-objcopy собраны без PE/EFI-target. Конверсию делает
+  `tools/efi-convert/elf2pe.py` — оставляет `.text/.data/.rodata`, сохраняет
+  адреса ELF как RVA и синтезирует `.reloc` из `R_X86_64_RELATIVE`.
+- `scripts/build-loader.sh` собирает копию дерева, чтобы submodule оставался
+  на пине; штатный `.efi`-шаг cmake падает на objcopy — это ожидаемо.
 
 ## ESP и QEMU
 
 ```text
-build/esp/EFI/BOOT/BOOTX64.EFI
-build/esp/EFI/BOOT/kernel
-build/esp/EFI/BOOT/boot-args.txt   # необязательно; сейчас "-v"
+build/esp/EFI/BOOT/BOOTX64.EFI   # из scripts/build-loader.sh
+build/esp/EFI/BOOT/boot-args.txt # необязательно
 ```
+
+`build/esp32.img` (1200 МБ) пересобирается `scripts/build-esp.sh`: FAT32,
+`EFI/BOOT/{BOOTX64.EFI,kernel}`, `ramdisk.img` в корне (в нём ~600 МБ, поэтому
+образ такой большой).
 
 QEMU (Windows-сборка; OVMF из `C:\Program Files\qemu\share`):
 
 ```powershell
-qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 2048 -smp 1 `
+qemu-system-x86_64.exe -machine q35 -cpu Skylake-Client -m 4096 -smp 1 `
   -drive if=pflash,format=raw,readonly=on,file=...\edk2-x86_64-code.fd `
   -drive if=pflash,format=raw,file=...\esp-vars.fd `
-  -drive file=fat:rw:...\build\esp,format=raw,if=ide `
-  -boot order=c -display none -vga std -serial none `
-  -monitor tcp:0.0.0.0:5555,server,nowait
+  -drive file=...\build\esp32.img,format=raw,if=ide `
+  -boot order=c -display none -vga std -serial file:... `
+  -no-reboot
 ```
+
+Второй диск (для тестов APFS/HFS) добавляется через
+`tools/kext-loader/boot-serial.ps1 -ExtraArgs`. **Для проверки сохранности**
+данных указывайте `cache=writethrough`: скрипт убивает QEMU через `Kill()`
+(SIGKILL), и с write-back кэшем записанное не доезжает до файла.
 
 `-cpu` обязателен: на `qemu64`/`max` XNU падает
 `panic("Unsupported CPU")` в `cpuid_set_info`.

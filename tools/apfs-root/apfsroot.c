@@ -32,6 +32,8 @@
 #define SYS_statfs    0x200009dL
 #define SYS_mount     0x20000a7L
 #define SYS_unmount   0x200009fL
+#define SYS_pread     0x2000099L
+#define SYS_pwrite    0x200009aL
 
 #define MNT_UPDATE    0x00010000
 
@@ -60,6 +62,23 @@ syscall3(long number, long a, long b, long c)
 	__asm__ volatile ("syscall\n\tsetc %1"
 	: "=a" (ret), "=qm" (failed)
 	: "a" (number), "D" (a), "S" (b), "d" (c)
+	: "rcx", "r11", "memory");
+	return failed ? -ret : ret;
+}
+
+static inline long
+syscall4(long number, long a, long b, long c, long d)
+{
+	long ret;
+	unsigned char failed;
+	register long arg4 __asm__("r10") = d;
+
+	/* The 4th syscall argument goes in %r10 (the syscall instruction clobbers
+	 * %rcx and %r11); pinning it with a register variable keeps the operand
+	 * numbering out of the picture. */
+	__asm__ volatile ("syscall\n\tsetc %1"
+	: "=a" (ret), "=qm" (failed)
+	: "a" (number), "D" (a), "S" (b), "d" (c), "r" (arg4)
 	: "rcx", "r11", "memory");
 	return failed ? -ret : ret;
 }
@@ -107,6 +126,18 @@ sys_geteuid(void)
 	return syscall3(0x2000019L, 0, 0, 0);
 }
 
+static long
+sys_pread(int fd, void *buf, long n, long offset)
+{
+	return syscall4(SYS_pread, fd, (long)buf, n, offset);
+}
+
+static long
+sys_pwrite(int fd, const void *buf, long n, long offset)
+{
+	return syscall4(SYS_pwrite, fd, (long)buf, n, offset);
+}
+
 /* ------------------------------------------------------------------ */
 /* Small string helpers (no libc)                                      */
 /* ------------------------------------------------------------------ */
@@ -126,23 +157,6 @@ static void
 puts_fd(int fd, const char *s)
 {
 	sys_write(fd, s, str_len(s));
-}
-
-static inline long
-syscall4(long number, long a, long b, long c, long d)
-{
-	long ret;
-	unsigned char failed;
-	register long arg4 __asm__("r10") = d;
-
-	/* The 4th syscall argument goes in %r10 (the syscall instruction clobbers
-	 * %rcx and %r11); pinning it with a register variable keeps the operand
-	 * numbering out of the picture. */
-	__asm__ volatile ("syscall\n\tsetc %1"
-	: "=a" (ret), "=qm" (failed)
-	: "a" (number), "D" (a), "S" (b), "d" (c), "r" (arg4)
-	: "rcx", "r11", "memory");
-	return failed ? -ret : ret;
 }
 
 static long
@@ -568,6 +582,69 @@ populate(const char *manifest_path, const char *dest)
 	return failed == 0 ? 0 : -1;
 }
 
+/* Read-modify-write one sector, so the AHCI write path is exercised without
+ * APFS in the way: read sector 0, write a pattern, read it back, compare. */
+static int
+rawtest(const char *path)
+{
+	static unsigned char before[512];
+	static unsigned char after[512];
+	static const char pattern[] = "CROSSXNU-RAWTEST";
+	struct lbuf l;
+	long fd = sys_open(path, O_RDWR, 0);
+	long r;
+
+	lb_init(&l);
+	lb_puts(&l, "apfsroot: rawtest ");
+	lb_puts(&l, path);
+	lb_puts(&l, " open -> ");
+	lb_dec(&l, (unsigned long)(fd < 0 ? -fd : 0));
+	lb_puts(&l, "\n");
+	lb_flush(&l, 1);
+	if (fd < 0) {
+		return -1;
+	}
+
+	r = sys_pread((int)fd, before, 512, 0);
+	lb_init(&l);
+	lb_puts(&l, "apfsroot: rawtest pread -> ");
+	lb_dec(&l, (unsigned long)(r < 0 ? -r : r));
+	lb_puts(&l, "\n");
+	lb_flush(&l, 1);
+
+	for (unsigned long i = 0; i < 512; i++) {
+		after[i] = (unsigned char)(i < sizeof(pattern) - 1
+		    ? pattern[i] : (unsigned char)(0xA5 ^ (i & 0xFF)));
+	}
+
+	r = sys_pwrite((int)fd, after, 512, 0);
+	lb_init(&l);
+	lb_puts(&l, "apfsroot: rawtest pwrite -> ");
+	lb_dec(&l, (unsigned long)(r < 0 ? -r : r));
+	lb_puts(&l, "\n");
+	lb_flush(&l, 1);
+
+	for (unsigned long i = 0; i < 512; i++) {
+		before[i] = 0;
+	}
+	r = sys_pread((int)fd, before, 512, 0);
+	int same = 1;
+	for (unsigned long i = 0; i < 512; i++) {
+		if (before[i] != after[i]) {
+			same = 0;
+			break;
+		}
+	}
+	lb_init(&l);
+	lb_puts(&l, "apfsroot: rawtest verify -> ");
+	lb_puts(&l, same ? "match" : "MISMATCH");
+	lb_puts(&l, "\n");
+	lb_flush(&l, 1);
+
+	sys_close((int)fd);
+	return same ? 0 : -1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Commands                                                            */
 /* ------------------------------------------------------------------ */
@@ -921,6 +998,8 @@ apfsroot_main(long argc, char **argv)
 		status = apfs_ready() ? 0 : 1;
 	} else if (argc >= 4 && str_eq(argv[1], "populate")) {
 		status = populate(argv[2], argv[3]) == 0 ? 0 : 1;
+	} else if (argc >= 3 && str_eq(argv[1], "rawtest")) {
+		status = rawtest(argv[2]) == 0 ? 0 : 1;
 	} else if (argc >= 3 && str_eq(argv[1], "unmount")) {
 		long r = sys_unmount(argv[2], 0);
 		struct lbuf l;
