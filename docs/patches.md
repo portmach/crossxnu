@@ -169,9 +169,9 @@ echo 0007-my-change.patch >> patches/series
 | `0022-hfs-filesystem-in-kernel.patch` | регистрирует HFS+ из `bsd/hfs` в `bsd/conf/files`, правки `vfs_subr.c` для root-mount |
 | `0023-serial-console-and-md-devices.patch` | serial-шим консоли, `md1` и дисковые ioctl в `memdev`, glue в `bsd_init.c` |
 | `0024-pthread-kext-replacement.patch` | встроенная таблица `pthread_functions` вместо `com.apple.kec.pthread`: `bsdthread_create/register/terminate`, workqueue-потоки с kevent-протоколом |
-| `0025-security-permissive-runtime.patch` | permissive-режим: пропуск signed blobs, отключение taint-проверки текстовых страниц, отчёт о user `#UD` |
+| `0025-security-permissive-runtime.patch` | permissive-режим: пропуск signed blobs, отключение taint-проверки текстовых страниц, отчёт о user `#UD`, заглушка `sys_record_system_event` (`entitled = TRUE` вместо EPERM) |
 | `0026-crypto-without-corecrypto.patch` | md5/sha2 без corecrypto KEC (ранние вызовы до загрузки kext) |
-| `0027-iokit-platform-glue.patch` | glue `IOKitBSDInit` и `iokit/conf/files` для сборки без Xcode |
+| `0027-iokit-platform-glue.patch` | glue `IOKitBSDInit` и `iokit/conf/files` для сборки без Xcode; guard для `copyClientEntitlement` при `amfi == NULL` под `CROSSXNU_SECURITY_PERMISSIVE` |
 | `0028-bringup-tracing.patch` | временная bring-up диагностика: трассировка syscall/mach-trap/path для pid 1, дамп планировщика (кольцевой буфер решений `thread_setrun`/`processor_setrun`/`thread_select`/`thread_invoke`/`processor_idle`/`thread_dispatch` + `crossxnu_sched_dump`) и workqueue по сторожевому таймеру. Здесь же — хук в `bsd_init.c`, который просит OSKext загрузить `com.crossxnu.driver.CrossXnuBlockStorage` перед `com.apple.filesystems.apfs`, а также монтирует том APFS через `kernel_mount()` с флагом `KERNEL_MOUNT_BASESYSTEMROOT` (см. `docs/status.md` §11) |
 
 Существенные детали `0024` (проверены на живой загрузке, см. `docs/status.md`):
@@ -220,7 +220,7 @@ echo 0007-my-change.patch >> patches/series
 
 | Инструмент | Описание функциональности и модификаций |
 | --- | --- |
-| `tools/apply_patches.py` | Автоматизирует наложение бинарных патчей на `launchd.real` (отключение проверки `platform_binary` при необходимости) и низкоуровневую модификацию структур файловой системы APFS в `build/apfs2g.img`. Записывает исполняемый скрипт в блок диска `0x2d310` (экстент инода `0x72e`), модифицирует запись DREC в листовом блоке B-Tree `0x3254d000` для `rc.temporaryDataVolume` (`target_inode = 0x72e`, `ftype = 0x8` / `DT_REG`), а также пересчитывает 64-битные контрольные суммы Fletcher-64 для обновленных блоков. |
+| `tools/apply_patches.py` | Автоматизирует наложение бинарных патчей ядра (`kernel.kc`, `kernel-plain.kc`, `esp32.img`), `launchd.real` и низкоуровневую модификацию структур файловой системы APFS в `build/apfs2g.img`. В ядре: патчит `copyClientEntitlement` (защита от разыменования NULL-указателя `amfi`) и `sys_record_system_event` (возврат успеха). В `launchd.real`: отключает проверки платформенного бинарника, принудительно включает консольный вывод и многопользовательский режим (`restore_mode`), ставит `retq`/NOP для `init_launchd_logging`, NOP для panic-перехода при сбое ранних задач, и заменяет требование успеха в конфигурации `tzinit` (`RequireSuccess` -> `IgnoreSuccess_`). В APFS-образе: записывает исполняемый скрипт в блок диска `0x2d310` (экстент инода `0x72e`), обновляет манифест демона `com.crossxnu.hello.plist` в блоке `0xcccd000`, модифицирует записи DREC в блоках B-Tree `0x324fa000` и `0x3254d000`, и пересчитывает 64-битные контрольные суммы Fletcher-64 для всех модифицированных блоков. |
 
 ## Скрипты запуска и автоматизации QEMU (`tools/kext-loader/`)
 

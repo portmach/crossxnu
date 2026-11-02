@@ -150,3 +150,17 @@
  		if (fpUDflt(rip) == 1) {
  			exc = EXC_BAD_INSTRUCTION;
  			code = EXC_I386_INVOP;
+--- a/bsd/kern/sys_record_event.c
++++ b/bsd/kern/sys_record_event.c
+@@ -31,7 +31,11 @@ sys_record_system_event(__unused struct proc *p, struct record_system_event_args
+ 	int error = 0;
+ 
+ 	boolean_t entitled = FALSE;
++#if CROSSXNU_SECURITY_PERMISSIVE
++	entitled = TRUE;
++#else
+ 	entitled = IOCurrentTaskHasEntitlement(SYSTEM_EVENT_ENTITLEMENT);
++#endif
+ 	if (!entitled) {
+ 		error = EPERM;
+ 		goto done;

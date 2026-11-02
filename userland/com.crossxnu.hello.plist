@@ -8,13 +8,10 @@
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>echo "crossxnu: launchd spawned a job as pid $$"; /bin/echo -n "crossxnu: uname = "; /usr/bin/uname -v</string>
+		<string>exec &gt;/dev/console 2&gt;&amp;1; echo "crossxnu: launchd spawned a job as pid $$"; /bin/echo -n "crossxnu: uname = "; /usr/bin/uname -v; exit 0</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
-	<key>StandardOutPath</key>
-	<string>/dev/console</string>
-	<key>StandardErrorPath</key>
-	<string>/dev/console</string>
 </dict>
+<!-- XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX -->
 </plist>

@@ -2262,5 +2262,89 @@ S1.3.193
 3. **Сетевой стек и виртуальное оборудование:**
    - Включение и настройка сетевого интерфейса (VirtIO-Net или Intel e1000) для обеспечения сетевого взаимодействия виртуальной машины macOS с хостом и внешней сетью.
 
+---
+
+## 19. Переход launchd в многопользовательский режим (Multi-User Boot) и запуск фоновых демонов
+
+### 19.1 Архитектурный рубеж: завершение ранней загрузки (`Early boot complete`)
+
+В рамках этапа перехода на нативный APFS-раздел корневой файловой системы (`build/apfs2g.img`) системный менеджер процессов macOS `launchd.real` (PID 1) успешно выполнил все предписанные ранние загрузочные процедуры и совершил переход в полнофункциональный режим многопользовательской системы:
+
+1. **Выполнение ранних boot-задач:**
+   - `/usr/libexec/rc.temporaryDataVolume` успешно запущен (PID 5), исполнил скрипт с выводом баннера Darwin (PID 6 `/bin/echo`, PID 7 `/usr/bin/uname`) и завершился с кодом 0 (`sys_exit`).
+   - `/usr/libexec/init_featureflags` успешно запущен (PID 17), отработал и корректно освобождён менеджером (`reap`).
+   - Опциональные задачи очистки каталогов (`dirs_cleaner`, `dirs_cleaner-usr`) и инициализации логирования (`init_launchd_logging`) штатно пройдены благодаря бинарным заглушкам.
+2. **Фиксация контрольной точки перехода:**
+   В системный журнал последовательного порта зафиксировано ключевое сообщение `launchd`:
+   ```text
+   com.apple.xpc.launchd|1970-01-01 00:03:02.166556 (boot) <Notice>: Early boot complete. Continuing system boot.
+   ```
+3. **Смена состояний доменов менеджера:**
+   `launchd` осуществил последовательную смену режимов работы:
+   - `com.apple.xpc.launchd (system) <Notice>: entering bootstrap mode`
+   - Сканирование каталога `/System/Library/LaunchDaemons` и регистрация сервисов (`com.apple.syslogd`, `com.apple.ramrod`, `com.crossxnu.hello`).
+   - `com.apple.xpc.launchd (system) <Notice>: exiting bootstrap mode`
+   - `com.apple.xpc.launchd (system) <Notice>: exiting ondemand mode` — выход из режима запуска только по требованию и переход к планированию фоновых демонов `RunAtLoad`.
+
+---
+
+### 19.2 Архитектура запуска служб macOS через `xpcproxy`
+
+Анализ журналов выполнения выявил фундаментальную особенность жизненного цикла демонов в macOS:
+1. В отличие от традиционных UNIX-систем (где `init` или `systemd` напрямую вызывают `execve`/`posix_spawn` бинарника демона), в macOS `launchd` никогда не запускает бинарник напрямую.
+2. Вместо этого `launchd` вызывает системный вызов `posix_spawn` для `/usr/libexec/xpcproxy <имя_сервиса>`:
+   ```text
+   crossxnu: p1 path posix_spawn </usr/libexec/xpcproxy>
+   crossxnu: fork 1 -> 30  (system/com.apple.ramrod)
+   crossxnu: fork 1 -> 31  (system/com.crossxnu.hello)
+   crossxnu: fork 1 -> 32  (system/com.apple.syslogd)
+   ```
+3. **Протокол рукопожатия `xpcproxy`:**
+   - Дочерний процесс `xpcproxy` загружает динамический линкер `dyld`, подключается к общему кэшу библиотек (`dyld_shared_cache`) и отправляет Mach-сообщение в порт `launchd`:
+     ```text
+     com.apple.xpc.launchd (system/com.apple.ramrod [30]) <Notice>: internal event: SOURCE_ATTACH, code = 0
+     com.apple.xpc.launchd (system/com.crossxnu.hello [31]) <Notice>: internal event: SOURCE_ATTACH, code = 0
+     com.apple.xpc.launchd (system/com.apple.syslogd [32]) <Notice>: internal event: SOURCE_ATTACH, code = 0
+     ```
+   - `launchd` по IPC передаёт в `xpcproxy` параметры манифеста службы (`ProgramArguments`, пути перенаправления ввода-вывода, переменные окружения, Mach-порты).
+   - `xpcproxy` настраивает окружение процесса и выполняет финальный системный вызов `posix_spawn` / `execve` реального исполняемого файла службы.
+   - Для демона `com.apple.ramrod` зафиксирован полный цикл перехода:
+     ```text
+     [30(ramrod)] check_np(...) vm_shared_region_start_address() returned 0x1
+     com.apple.xpc.launchd (system/com.apple.ramrod [30]) <Notice>: service state: running
+     com.apple.xpc.launchd (system/com.apple.ramrod [30]) <Notice>: Successfully spawned ramrod[30] because speculative
+     ```
+
+---
+
+### 19.3 Устранение рассинхронизации накопителей в тестовом скрипте (`scripts/serial-run.ps1`)
+
+При исследовании тестового стенда обнаружена причина, по которой ранние запуски откатывались в режим однопользовательского восстановления HFS+:
+- Скрипт `scripts/serial-run.ps1` передавал в QEMU только параметр `-drive file=$esp,format=raw,if=ide` (диск 0, образ `esp32.img` с FAT32 и ramdisk HFS+), полностью опуская вторичный образ `build/apfs2g.img`.
+- В результате ядро не находило APFS-накопитель на шине IDE и запускало fallback-путь монтирования `md0`.
+- В `scripts/serial-run.ps1` внедрено автоматическое детектирование `build/apfs2g.img` с добавлением диска на вторичный IDE-канал (`index=1`):
+  ```powershell
+  if (Test-Path $apfsImg) {
+      $qemuArgs += @("-drive", "file=$apfsImg,format=raw,if=ide,index=1")
+  }
+  ```
+- Добавлены параметры `$Marker`, `$DrainSeconds`, `$Apfs` и `$ExtraArgs`, обеспечивающие точный захват многопользовательских фаз загрузки.
+
+---
+
+### 19.4 Сводная таблица верификации многопользовательского режима
+
+| Этап / Событие | Ожидаемый результат | Фактический результат (логи `serial-multiuser12.log` и `serial-multiuser14.log`) | Статус |
+| --- | --- | --- | --- |
+| **Ранняя загрузка** | Завершение `rc.temporaryDataVolume` | `Early boot complete. Continuing system boot.` (строка 21199 в 14) | **Успех** |
+| **Режим Bootstrap** | Вход и сканирование LaunchDaemons | `entering bootstrap mode`, чтение каталога `/System/Library/LaunchDaemons` | **Успех** |
+| **Режим On-Demand** | Переход к запуску постоянных служб | `exiting ondemand mode`, планирование `WILL_SPAWN` (строка 21411 в 14) | **Успех** |
+| **Служба `ramrod`** | Запуск через `xpcproxy` | PID 30, `Successfully spawned ramrod[30]`, `service state: running` | **Успех** |
+| **Служба `hello`** | Запуск `xpcproxy` и замена на `/bin/sh` | PID 31, `xpcproxy spawned with pid 31`, `SOURCE_ATTACH`, `service state: running`, `Successfully spawned sh[31] because speculative` (строка 24165 в 14) | **Успех** |
+| **Служба `syslogd`** | Регистрация и запуск `xpcproxy` | PID 32, `xpcproxy spawned with pid 32`, `SOURCE_ATTACH` | **Успех** |
+| **Параллельная работа демонов** | Одновременное исполнение служб в userland | PIDs 30, 31, 32 активны в таблице потоков ядра (`watchdog-child`) с обработкой Mach IPC сообщений (`_ipc_mqueue_receive_on_thread_and_unlock`) | **Успех** |
+
+
+
 
 

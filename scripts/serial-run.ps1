@@ -24,8 +24,12 @@ param(
     [int]$Port = 4444,
     [string[]]$Commands = @(),
     [string]$OutFile = "",
+    [string]$Marker = "sh-3\.2#",
+    [int]$DrainSeconds = 5,
     [int]$BootTimeoutSeconds = 180,
     [int]$PerCommandSeconds = 20,
+    [string]$Apfs = "",
+    [string[]]$ExtraArgs = @(),
     [switch]$KeepRunning
 )
 
@@ -34,6 +38,7 @@ $ErrorActionPreference = "Stop"
 $esp  = Join-Path $Repo "build\esp32.img"
 $code = Join-Path $Repo "build\edk2-x86_64-code.fd"
 $vars = Join-Path $Repo "build\esp-vars.fd"
+$apfsImg = if ($Apfs) { $Apfs } else { Join-Path $Repo "build\apfs2g.img" }
 
 foreach ($f in @($esp, $code, $vars)) {
     if (-not (Test-Path $f)) { throw "missing $f" }
@@ -51,7 +56,12 @@ $qemuArgs = @(
     "-smp", "$Cpus",
     "-drive", "if=pflash,format=raw,readonly=on,file=$code",
     "-drive", "if=pflash,format=raw,file=$vars",
-    "-drive", "file=$esp,format=raw,if=ide",
+    "-drive", "file=$esp,format=raw,if=ide"
+)
+if (Test-Path $apfsImg) {
+    $qemuArgs += @("-drive", "file=$apfsImg,format=raw,if=ide,index=1")
+}
+$qemuArgs += @(
     "-boot", "order=c",
     "-display", "none",
     "-vga", "std",
@@ -59,6 +69,9 @@ $qemuArgs = @(
     "-monitor", "none",
     "-no-reboot"
 )
+if ($ExtraArgs) {
+    $qemuArgs += $ExtraArgs
+}
 
 Write-Host "boot: $esp (serial on tcp:$Port)"
 $proc = Start-Process -FilePath $Qemu -ArgumentList $qemuArgs -PassThru
@@ -88,19 +101,15 @@ function Drain-For {
     param([System.Net.Sockets.TcpClient]$Client, [int]$Seconds)
     $buffer = New-Object byte[] 65536
     $deadline = (Get-Date).AddSeconds($Seconds)
-    $idle = 0
-    while ((Get-Date) -lt $deadline) {
+    while ((Get-Date) -lt $deadline -and -not $proc.HasExited) {
         if ($Client.Available -gt 0) {
             $n = $Client.GetStream().Read($buffer, 0, $buffer.Length)
             if ($n -gt 0) {
                 [void]$transcript.Append([System.Text.Encoding]::ASCII.GetString($buffer, 0, $n))
-                $idle = 0
                 continue
             }
         }
         Start-Sleep -Milliseconds 200
-        $idle += 200
-        if ($idle -ge 2000) { break }
     }
 }
 
@@ -144,10 +153,10 @@ try {
     if (-not $client) { throw "could not connect to the guest serial port" }
 
     Write-Host "waiting for the guest shell prompt ..."
-    if (-not (Read-Until -Client $client -Marker "sh-3\.2#" -TimeoutSeconds $BootTimeoutSeconds)) {
+    if (-not (Read-Until -Client $client -Marker $Marker -TimeoutSeconds $BootTimeoutSeconds)) {
         Write-Host "warning: shell prompt not seen within $BootTimeoutSeconds s"
     }
-    Drain-For -Client $client -Seconds 1
+    Drain-For -Client $client -Seconds $DrainSeconds
 
     foreach ($cmd in $Commands) {
         Write-Host "guest> $cmd"
